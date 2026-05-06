@@ -1,4 +1,4 @@
-# BMO Virtual Friend
+# BMO Virtual Friend --> Python 3.12.8
 
 Rosto animado no estilo **BMO** de *Hora de Aventura*, projetado para rodar
 em um display OLED SSD1306 de 0.96".
