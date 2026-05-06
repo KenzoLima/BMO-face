@@ -433,3 +433,43 @@ class PygameRenderer:
         self.clock.tick(FPS)
 
 
+# ─── Loop principal ───────────────────────────────────────────────────────────
+def main():
+    fb       = FrameBuffer()
+    face     = BMOFace(fb)
+    renderer = PygameRenderer()
+
+    states = {
+        pygame.K_1: ("IDLE", face.draw_idle),
+        pygame.K_2: ("FELIZ", face.draw_happy),
+        pygame.K_3: ("TRISTE", face.draw_sad),
+        pygame.K_4: ("SONOLENTO", face.draw_sleepy),
+        pygame.K_5: ("SURPRESO", face.draw_surprised),
+        pygame.K_6: ("CANTANDO", face.draw_singing),
+        pygame.K_7: ("WINK", face.draw_wink),
+        pygame.K_8: ("BOOT", face.draw_boot),
+        pygame.K_9: ("FALANDO", face.draw_speaking)
+    }
+
+    current_name = "IDLE"
+    current_draw = face.draw_idle
+    frame = 0
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit(); sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    pygame.quit(); sys.exit()
+                if event.key in states:
+                    current_name, current_draw = states[event.key]
+                    frame = 0
+
+        current_draw(frame)
+        renderer.render(fb, current_name, frame)
+        frame += 1
+
+
+if __name__ == "__main__":
+    main()
