@@ -42,17 +42,17 @@ python bmo_oled.py
 
 ## Expressões disponíveis
 
-| Tecla | Estado     | Animação |
-|-------|------------|----------|
-| 1     | Idle       | Piscar olhos + cursor terminal |
-| 2     | Feliz      | Olhos `^` + sorriso + bochechas + bounce |
-| 3     | Triste     | Olhos `U` + boca virada + lágrimas |
-| 4     | Sonolento  | Olhos meio fechados + zzz flutuante |
-| 5     | Surpreso   | Olhos redondos + tremor + linhas de choque |
-| 6     | Cantando   | Boca oscilando + notas flutuantes |
-| 7     | Wink       | Piscadinha + bochecha |
-| 8     | Boot       | Barra de progresso + logo BMO |
-| ESC   | —          | Sair |
+| Tecla | Estado     | Animação                                  |
+|-------|------------|-------------------------------------------|
+| 1     | Idle       | Piscar olhos + cursor terminal            |
+| 2     | Feliz      | Olhos `^` + sorriso + bochechas + bounce  |
+| 3     | Triste     | Olhos `U` + boca virada + lágrimas        |
+| 4     | Sonolento  | Olhos meio fechados + zzz flutuante       |
+| 5     | Surpreso   | Olhos redondos + tremor + linhas de choque|
+| 6     | Cantando   | Boca oscilando + notas flutuantes         |
+| 7     | Wink       | Piscadinha + bochecha                     |
+| 8     | Boot       | Barra de progresso + logo BMO             |
+| ESC   | —          | Sair                                      |
 
 ## Memória de imagem
 
