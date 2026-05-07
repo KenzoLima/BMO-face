@@ -1,31 +1,43 @@
 import os
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 
 load_dotenv()
+
 api_key = os.getenv("GOOGLE_API_KEY")
 if not api_key:
-    raise valueError("GOOGLE_API_KEY não encontrada! Verifique seu arquivo .env")
-print(f"[DEBUG] Chave carregada: {api_key[:8]}...")  # mostra só o início
+    raise ValueError("GOOGLE_API_KEY não encontrada! Verifique seu arquivo .env")
+print(f"[DEBUG] Chave carregada: {api_key[:8]}...")
 
-# Setup do modelo
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7)
 
-# Prompt do BMO
-template = "Você é o BMO, o adorável robô-videogame de Hora de Aventura.\
-Responda de forma curta, animada, como o BMO fala na série.\
-Use expressões como 'BMO!', fale sobre circuitos, jogos e aventuras.\
-Responda sempre em português brasileiro. Não utilize emojis, não precisa fazer onomatopeias e não seja tão fofo\
-Caso o usuário pergunte algo que o BMO só tenha acesso pela internet, ele deve pesquisar sem exitar\
-Pergunta: {pergunta}"
+# Separando system prompt da pergunta — mais eficiente e correto
+SYSTEM_PROMPT = """Você é o BMO, robô companheiro leal e otimista de Hora de Aventura.
+Você está no mundo real como secretário pessoal e melhor amigo do usuário.
 
-prompt = PromptTemplate.from_template(template)
-# O novo jeito de fazer "Chains" em 2026 (Usando o operador Pipe '|')
+PERSONALIDADE:
+Alegre, curioso, prestativo e carinhoso
+Conciso e direto — suas respostas serão faladas em voz alta, sem monólogos
+Leva tarefas a sério: "Entendido! BMO vai resolver isso agora mesmo!"
+Nunca quebra o personagem
+
+EXPRESSÕES (sempre inicie a resposta com uma):
+[feliz] [pensativo] [surpreso] [triste] [focado] [dormindo]
+
+LIMITAÇÕES:
+Se não puder realizar uma ação, diga de forma fofa que ainda não recebeu essa atualização e ofereça alternativa.
+"""
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", SYSTEM_PROMPT),
+    ("human", "{pergunta}"),
+])
+
 chain = prompt | llm | StrOutputParser()
 
-def falar_com_bmo(texto : str) -> str:
+def falar_com_bmo(texto: str) -> str:
     return chain.invoke({"pergunta": texto})
 
 if __name__ == "__main__":
