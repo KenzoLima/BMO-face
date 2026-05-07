@@ -1,33 +1,5 @@
 import speech_recognition as sr
 
-def processar_cerebro(texto):
-    texto = texto.lower() # Transformar tudo em minúsculo para facilitar a busca
-    
-    # Dicionário de respostas e expressões
-    if "quem é você" in texto or "seu nome" in texto:
-        print("BMO: Eu sou o BMO! Sou muito mais que um videogame.")
-        return "FELIZ"
-
-    elif "como você está" in texto or "tudo bem" in texto:
-        print("BMO: Estou excelente! Acabei de rodar um check-up no meu sistema.")
-        return "FELIZ"
-
-    elif "hora de aventura" in texto:
-        print("BMO: Finn! Jake! Onde vocês estão?")
-        return "SURPRESO"
-
-    elif "piada" in texto:
-        print("BMO: Por que o robô foi ao médico? Porque ele tinha um vírus!")
-        return "FALANDO"
-
-    elif "tchau" in texto or "desligar" in texto:
-        print("BMO: Tchau tchau! Vou entrar em modo de hibernação.")
-        return "SONOLENTO"
-
-    else:
-        print(f"BMO: Hum, você disse '{texto}', mas não sei o que significa ainda.")
-        return "NEUTRO"
-
 def bmo_ouvir():
     microfone = sr.Recognizer()
     with sr.Microphone() as source:
