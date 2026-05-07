@@ -1,35 +1,55 @@
 import speech_recognition as sr
 
-def bmo_ouvir():
-    # Cria o objeto que vai atuar como o "ouvido" do BMO
-    microfone = sr.Recognizer()
+def processar_cerebro(texto):
+    texto = texto.lower() # Transformar tudo em minúsculo para facilitar a busca
     
-    # Inicia a comunicação com o microfone padrão do seu computador
+    # Dicionário de respostas e expressões
+    if "quem é você" in texto or "seu nome" in texto:
+        print("BMO: Eu sou o BMO! Sou muito mais que um videogame.")
+        return "FELIZ"
+
+    elif "como você está" in texto or "tudo bem" in texto:
+        print("BMO: Estou excelente! Acabei de rodar um check-up no meu sistema.")
+        return "FELIZ"
+
+    elif "hora de aventura" in texto:
+        print("BMO: Finn! Jake! Onde vocês estão?")
+        return "SURPRESO"
+
+    elif "piada" in texto:
+        print("BMO: Por que o robô foi ao médico? Porque ele tinha um vírus!")
+        return "FALANDO"
+
+    elif "tchau" in texto or "desligar" in texto:
+        print("BMO: Tchau tchau! Vou entrar em modo de hibernação.")
+        return "SONOLENTO"
+
+    else:
+        print(f"BMO: Hum, você disse '{texto}', mas não sei o que significa ainda.")
+        return "NEUTRO"
+
+def bmo_ouvir():
+    microfone = sr.Recognizer()
     with sr.Microphone() as source:
-        print("BMO: Ajustando os ouvidos (calibrando ruído do ambiente)...")
+        print("\nBMO: Ajustando ouvidos...")
         microfone.adjust_for_ambient_noise(source, duration=1)
+        print("BMO: Pode falar!")
         
-        print("\nBMO: Pode falar! Estou ouvindo...")
         try:
-            audio = microfone.listen(source, timeout=5, phrase_time_limit=10)
-            
-            print("BMO: Processando o que você disse...")
-            
-            # Manda o áudio para o Google e pede a resposta em Português do Brasil
+            audio = microfone.listen(source, timeout=5, phrase_time_limit=8)
             texto = microfone.recognize_google(audio, language='pt-BR')
             
-            print(f"\n---> Você disse: '{texto}'")
+            print(f"---> Você: {texto}")
             
-        # Tratamento de erros comuns na captação de voz
+            # O cérebro decide o que fazer com o texto
+            expressao_escolhida = processar_cerebro(texto)
+            print(f"BMO: [Expressão sugerida: {expressao_escolhida}]")
+            
         except sr.UnknownValueError:
-            print("\nBMO: Escutei um barulho, mas não entendi as palavras.")
-        except sr.WaitTimeoutError:
-            print("\nBMO: Você demorou muito para falar, acabei dormindo.")
-        except sr.RequestError:
-            print("\nBMO: Estou sem internet para processar as palavras.")
+            print("BMO: Não entendi...")
+        except Exception as e:
+            print(f"BMO: Erro no sistema: {e}")
 
 if __name__ == "__main__":
-    # Um loop infinito para você testar várias vezes sem precisar rodar o script de novo
     while True:
         bmo_ouvir()
-        print("-" * 40)

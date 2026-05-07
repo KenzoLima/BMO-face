@@ -4,12 +4,14 @@ Rosto animado no estilo **BMO** de *Hora de Aventura*, projetado para rodar
 em um display OLED SSD1306 de 0.96".
 
 ```
-┌──────────────────────────┐
-│  ╔════════════════════╗  │
-│  ║  (◉)        (◉)   ║  │
-│  ║       ────         ║  │
+┌───────────────────z──────┐
+│  ╔══════════════════z═╗  │
+│  ║                 z  ║  │
+│  ║  (  )       (  ) z ║  │
+│  ║        ────        ║  │
+│  ║                    ║  │
 │  ╚════════════════════╝  │
-└──────────────────────────┘
+└                          ┘
         BMO Virtual Friend
 ```
 
@@ -28,7 +30,7 @@ pip install pygame
 python bmo_face.py
 ```
 
-### Display real (Raspberry Pi)
+### Display real (Esp-32 Wroom)
 ```bash
 pip install luma.oled pillow
 python bmo_oled.py
