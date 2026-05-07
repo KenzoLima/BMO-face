@@ -22,3 +22,5 @@ def perguntar_ao_bmo(texto):
 if __name__ == "__main__":
     resp = perguntar_ao_bmo("Quem é você?")
     print(f"BMO: {resp}")
+
+
