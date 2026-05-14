@@ -24,6 +24,32 @@ def escutar_wake_word(microfone: sr.Recognizer, source) -> bool:
         print(f"BMO: Erro na escuta passiva: {e}")
     return False
 
+def escutar_comando(microfone: sr.Recognizer, source) -> str | None:
+    """
+    Escuta ativa: só chamada após wake word confirmada. Aqui sim vale a pena uma janela maior de atenção.
+    """
+    print("BMO: Pode falar!")
+
+    try:
+        audio = microfone.listen(source, timeout=10, phrase_time_limit=15)
+        texto = microfone.recognize_google(audio, language='pt-BR').strip()
+        
+        if len(texto) < TAMANHO_MINIMO_FALA:
+            print("BMO: Hm, não entendi direito...")
+            return None
+        
+        return texto
+    
+    except sr.UnknownValueError:
+        print("BMO: Não entendi nada... pode repetir?")
+    except sr.WaitTimeoutError:
+        print("BMO: Não ouvi ninguém falar.")
+    except Exception as e:
+        print(f"BMO: Erro ao escutar comando: {e}")
+    
+    return None
+
+
 def bmo_ouvir():
     microfone = sr.Recognizer()
     microfone.energy_threshol = 400
