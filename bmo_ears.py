@@ -12,7 +12,7 @@ def escutar_wake_word(microfone: sr.Recognizer, source) -> bool:
     """
     try:
         audio = microfone.listen(source, timeout=2, phrase_time_limit=3)
-        texto = microfone.recognize_google(audio, langage='pt-BR'). lower().strip()
+        texto = microfone.recognize_google(audio, language='pt-BR'). lower().strip()
 
         if any (wake in texto for wake in WAKE_WORDS):
             print(f"BMO: Oi! 👾 (gatilho: '{texto}')")
@@ -50,41 +50,34 @@ def escutar_comando(microfone: sr.Recognizer, source) -> str | None:
     return None
 
 
-def bmo_ouvir():
+def bmo_loop():
     microfone = sr.Recognizer()
-    microfone.energy_threshol = 400
-    microfone.dynamic_energy_threshol = True
+    microfone.energy_threshold = 200        # era energy_threshol (typo)
+    microfone.dynamic_energy_threshold = True # era dynamic_energy_threshol (typo)
 
     with sr.Microphone() as source:
-        print("\nBMO:...")
+        print("\nBMO: Calibrando...")
         microfone.adjust_for_ambient_noise(source, duration=1.5)
-        print("BMO: Pode falar!")
-        
-        try:
-            audio = microfone.listen(source, timeout=10, phrase_time_limit=10)
-            texto = microfone.recognize_google(audio, language='pt-BR')
-            texto = texto.strip()
+        print(f"[DEBUG] energy_threshold calibrado: {microfone.energy_threshold:.0f}")
+        print("BMO: Pronto! Me chame pelo nome (ex: 'ei bimo')\n")  
+        while True:
+            #escuta passiva
+            print("BMO: aguardando wake word...")   # feedback a cada iteração
+            if not escutar_wake_word(microfone, source):
+                continue
 
-            if len(texto) < TAMANHO_MINIMO_FALA:
-                print("ignorei o ruído...")
-                return
-            
-            print(f"---> Você: {texto}")
+            #escuta ativa
+            comando = escutar_comando(microfone, source)
+            if not comando:
+                continue
+
+            print(f"---> Você: {comando}")
             print("Computando...")
 
-            resposta = falar_com_bmo(texto)
-            print(f"BMO: {resposta}")
-            
-            
-        except sr.UnknownValueError:
-            print("BMO: Hm? Não entendi nada... pode repetir?")
-        except sr.WaitTimeoutError:
-            print("BMO: Zzz... não ouvi ninguém falar.")
-        except Exception as e:
-            print(f"BMO: Erro no sistema: {e}")
+            resposta = falar_com_bmo(comando)
+            print(f"BMO: {resposta}\n")
+
+            time.sleep(0.3)
 
 if __name__ == "__main__":
-    print("=== BMO ligado! Fale comigo ===")
-    while True:
-        bmo_ouvir()
-        time.sleep(0.3)
+    bmo_loop()
