@@ -25,6 +25,17 @@ def test_normaliza_espacos():
     assert limpar_para_fala("[focado]   Feito!   Bip!") == "Feito! Bip!"
 
 
+def test_bmo_vira_bimo_na_fala():
+    assert limpar_para_fala("Eu sou o BMO!") == "Eu sou o Bímo!"
+    assert limpar_para_fala("bmo está pronto") == "Bímo está pronto"
+
+
+def test_bmo_dentro_de_palavra_nao_e_alterado():
+    # 'bmo_face.py' é nome de arquivo, não o nome do robô
+    # (o '_' sai junto com o markdown, mas o 'bmo' colado não vira 'Bímo')
+    assert limpar_para_fala("abra o bmo_face.py") == "abra o bmoface.py"
+
+
 def test_texto_sem_nada_falavel_vira_vazio():
     assert limpar_para_fala("[dormindo] 💤") == ""
 

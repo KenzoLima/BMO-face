@@ -6,7 +6,7 @@ Importar este pacote já registra todas as ferramentas no registry
     from bmo.hands import schemas_gemini, executar_ferramenta
 """
 
-from . import apps, files, shell  # noqa: F401 - imports registram as ferramentas
+from . import apps, files, reminders, shell, web  # noqa: F401 - registram as ferramentas
 from .registry import (
     executar_ferramenta,
     listar_ferramentas,

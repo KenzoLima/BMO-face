@@ -5,3 +5,7 @@ ver_modelos.py/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+build/
+dist/
+*.spec
+instalador/saida/

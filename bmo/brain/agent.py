@@ -55,7 +55,7 @@ class Cerebro:
     def responder(self, texto: str) -> str:
         texto = texto.strip()
         if not texto:
-            return "[pensativo] Você não disse nada... bip?"
+            return "[pensativo] Você não disse nada... pode repetir?"
 
         try:
             resposta = self.provedor.responder(texto, self.historico)
@@ -64,14 +64,14 @@ class Cerebro:
             if self.reserva is None:
                 return (
                     "[triste] Meu cérebro principal falhou e não tenho reserva "
-                    "configurada... buup. Tente de novo daqui a pouco?"
+                    "configurada... Tente de novo daqui a pouco?"
                 )
             print(f"[BMO] Tentando reserva '{self.reserva.nome}'...")
             try:
                 resposta = self.reserva.responder(texto, self.historico)
             except Exception as erro_reserva:
                 print(f"[BMO] Reserva também falhou: {erro_reserva}")
-                return "[triste] Meus dois cérebros falharam... buup. Tente mais tarde?"
+                return "[triste] Meus dois cérebros falharam... Tente mais tarde?"
 
         self.historico.append({"role": "user", "content": texto})
         self.historico.append({"role": "assistant", "content": resposta})

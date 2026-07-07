@@ -86,9 +86,12 @@ def executar_comando(comando: str, timeout_segundos: int = 30) -> dict:
 
     timeout_segundos = max(1, min(timeout_segundos, TIMEOUT_TETO))
 
+    # PS 5.1 emite no codepage OEM por padrão; forçamos UTF-8 p/ não perder acentos
+    comando_utf8 = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " + comando
+
     try:
         resultado = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", comando],
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", comando_utf8],
             capture_output=True,
             text=True,
             encoding="utf-8",

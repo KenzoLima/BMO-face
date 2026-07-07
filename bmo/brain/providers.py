@@ -21,7 +21,7 @@ import os
 
 from bmo.hands import executar_ferramenta, schemas_gemini, schemas_openai
 
-from .prompts import SYSTEM_PROMPT
+from .prompts import system_prompt_atual
 
 MAX_RODADAS_DE_FERRAMENTAS = 5
 
@@ -42,9 +42,13 @@ class ProvedorGemini:
         self._types = types
         self.cliente = genai.Client(api_key=chave)
         self.modelo = modelo or os.getenv("BMO_MODEL_GEMINI", "gemini-2.5-flash")
-        self.config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            tools=[types.Tool(function_declarations=schemas_gemini())],
+        self._tools = [types.Tool(function_declarations=schemas_gemini())]
+
+    def _config(self):
+        """Config montada a cada chamada: o system prompt carrega o relógio."""
+        return self._types.GenerateContentConfig(
+            system_instruction=system_prompt_atual(),
+            tools=self._tools,
             temperature=0.7,
         )
 
@@ -61,9 +65,10 @@ class ProvedorGemini:
         contents = self._converter_historico(historico)
         contents.append(t.Content(role="user", parts=[t.Part.from_text(text=texto)]))
 
+        config = self._config()
         for _ in range(MAX_RODADAS_DE_FERRAMENTAS):
             resposta = self.cliente.models.generate_content(
-                model=self.modelo, contents=contents, config=self.config
+                model=self.modelo, contents=contents, config=config
             )
 
             chamadas = resposta.function_calls or []
@@ -85,7 +90,7 @@ class ProvedorGemini:
             ]
             contents.append(t.Content(role="tool", parts=partes))
 
-        return "[pensativo] Tentei várias vezes mas me enrolei nas ferramentas... bip."
+        return "[pensativo] Tentei várias vezes mas me enrolei nas ferramentas..."
 
 
 class ProvedorGroq:
@@ -108,7 +113,7 @@ class ProvedorGroq:
         self.modelo = modelo or os.getenv("BMO_MODEL_GROQ", "llama-3.3-70b-versatile")
 
     def responder(self, texto: str, historico: list[dict]) -> str:
-        mensagens: list = [{"role": "system", "content": SYSTEM_PROMPT}]
+        mensagens: list = [{"role": "system", "content": system_prompt_atual()}]
         mensagens += historico
         mensagens.append({"role": "user", "content": texto})
 
@@ -136,4 +141,4 @@ class ProvedorGroq:
                     }
                 )
 
-        return "[pensativo] Tentei várias vezes mas me enrolei nas ferramentas... bip."
+        return "[pensativo] Tentei várias vezes mas me enrolei nas ferramentas..."

@@ -52,9 +52,9 @@ def test_aliases_resolvem_para_candidatos():
 # ── buscar_arquivo ──────────────────────────────────────────────────────────
 
 def test_busca_por_nome_encontra_arquivo_do_projeto():
-    resultado = buscar_arquivo("bmo_brain", diretorio_base=RAIZ_PROJETO)
+    resultado = buscar_arquivo("agent", diretorio_base=RAIZ_PROJETO)
     assert resultado["sucesso"] is True
-    assert any(caminho.endswith("bmo_brain.py") for caminho in resultado["arquivos"])
+    assert any(caminho.endswith("agent.py") for caminho in resultado["arquivos"])
 
 
 def test_busca_por_extensao():

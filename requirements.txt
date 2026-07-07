@@ -6,11 +6,17 @@ python-dotenv>=1.0
 # Modulo 1 - Percepcao (STT)
 SpeechRecognition>=3.14
 PyAudio>=0.2.14
+pvporcupine>=3.0        # wake word 100% local (zero requisicoes em espera)
+pvrecorder>=1.2         # captura de audio para o Porcupine
+vosk>=0.3.45            # wake word local SEM conta (modelo em modelos/vosk-model-small-pt-*)
 # faster-whisper>=1.1   # Fase 2: transcricao 100% local (descomente quando migrar)
 
 # Modulo 3 - Cerebro (LLM + Function Calling nativo)
 google-genai>=1.0
 openai>=1.60            # cliente p/ Groq e qualquer API compativel com OpenAI
+
+# Modulo 2 - Maos (ferramentas do OS)
+ddgs>=9.0               # busca na internet sem chave de API (DuckDuckGo)
 
 # Modulo 4 - Resposta (TTS)
 edge-tts>=7.0
@@ -20,3 +26,4 @@ pygame>=2.6
 
 # Desenvolvimento / Testes
 pytest>=8.0
+# Build do instalador (opcional): pyinstaller>=6.0 + Inno Setup 6

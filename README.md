@@ -1,95 +1,80 @@
-# BMO Virtual Friend --> Python 3.12.8
+# BMO — Assistente Virtual Pessoal 🎮
 
-Rosto animado no estilo **BMO** de *Hora de Aventura*, projetado para rodar
-em um display OLED SSD1306 de 0.96".
+Assistente de voz para Windows inspirado no BMO de Hora de Aventura.
+Ele mora numa janelinha flutuante na sua área de trabalho, escuta a
+palavra **"Bimo"** sem gastar internet, executa ações reais no computador
+e responde falando — com o rosto reagindo a cada fase.
 
-```
-┌───────────────────z──────┐
-│  ╔══════════════════z═╗  │
-│  ║                 z  ║  │
-│  ║  (  )       (  ) z ║  │
-│  ║        ────        ║  │
-│  ║                    ║  │
-│  ╚════════════════════╝  │
-└                          ┘
-        BMO Virtual Friend
-```
+## O que ele faz
 
-## Arquivos
+- **Escuta local**: a espera pela wake word roda offline (Vosk/Porcupine),
+  sem custo por requisição; só o comando após o gatilho usa a API do Google.
+- **Age no PC**: abre aplicativos, busca arquivos, roda comandos no
+  PowerShell (com bloqueio de comandos destrutivos), pesquisa na internet
+  e agenda lembretes com notificação nativa do Windows.
+- **Cérebro com fallback**: Gemini (padrão) com fallback automático para
+  Groq — function calling nativo nos dois.
+- **Rosto animado**: janela 256x128 sempre no topo, arrastável, com estados
+  de standby, ouvindo, processando, falando, emoções e erro.
 
-| Arquivo        | Função |
-|----------------|--------|
-| `bmo_face.py`  | Toda a lógica de desenho + simulador Pygame |
-| `bmo_oled.py`  | Port para o display OLED físico (SSD1306) |
+## Rodando do código
 
-## Instalação
+```powershell
+# 1. dependências (uma vez)
+python -m venv .venv
+.\.venv\Scripts\pip install -r requirements.txt
 
-### Teste local (PC)
-```bash
-pip install pygame
-python bmo_face.py
-```
+# 2. configuração (uma vez): o .env é criado sozinho na primeira execução;
+#    edite e preencha GOOGLE_API_KEY (grátis em https://aistudio.google.com/apikey)
 
-### Display real (Esp-32 Wroom)
-```bash
-pip install luma.oled pillow
-python bmo_oled.py
+# 3. rodar
+.\.venv\Scripts\python.exe main.py           # janela flutuante + voz (padrão)
+.\.venv\Scripts\python.exe main.py --voz     # voz no terminal, sem janela
+.\.venv\Scripts\python.exe main.py --texto   # chat de texto (sem microfone)
 ```
 
-### Display real (CircuitPython / ESP32)
-```bash
-pip install adafruit-circuitpython-ssd1306
-python bmo_oled.py
+Fale **"Bimo"** e aguarde o "Pode falar!" — aí é só pedir:
+*"abre a calculadora"*, *"quanto espaço tem no disco?"*, *"vai chover amanhã?"*,
+*"me lembra de beber água às 15h"*.
+
+## Instalando (usuário final)
+
+Use o instalador gerado em `instalador/saida/` (veja abaixo como gerá-lo).
+Pré-requisitos da máquina:
+
+- Windows 10/11 de 64 bits, microfone e alto-falantes;
+- uma chave (grátis) do Gemini em https://aistudio.google.com/apikey —
+  o BMO cria o arquivo `.env` na pasta de instalação no primeiro uso e
+  avisa onde colar a chave;
+- internet para o cérebro (LLM), a fala (TTS) e a transcrição de comandos.
+  A espera pela wake word funciona offline.
+
+## Gerando o executável e o instalador
+
+```powershell
+.\.venv\Scripts\pip install pyinstaller
+powershell -ExecutionPolicy Bypass -File instalador\build.ps1
+# resultado: dist\BMO\ (app) e instalador em instalador\saida\
 ```
 
-## Expressões disponíveis
+## Testes
 
-| Tecla | Estado     | Animação                                  |
-|-------|------------|-------------------------------------------|
-| 1     | Idle       | Piscar olhos + cursor terminal            |
-| 2     | Feliz      | Olhos `^` + sorriso + bochechas + bounce  |
-| 3     | Triste     | Olhos `U` + boca virada + lágrimas        |
-| 4     | Sonolento  | Olhos meio fechados + zzz flutuante       |
-| 5     | Surpreso   | Olhos redondos + tremor + linhas de choque|
-| 6     | Cantando   | Boca oscilando + notas flutuantes         |
-| 7     | Wink       | Piscadinha + bochecha                     |
-| 8     | Boot       | Barra de progresso + logo BMO             |
-| ESC   | —          | Sair                                      |
-
-## Memória de imagem
-
-O `FrameBuffer` espelha exatamente a RAM do SSD1306:
-
-```
-128 × 64 pixels × 1 bit/pixel = 8192 bits = 1024 bytes = 1 KB
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\ -q         # suíte completa
+.\.venv\Scripts\python.exe tests\calibrar_wake_word.py  # precisão da wake word
 ```
 
-Apenas **1 buffer** é mantido em memória. Não há sprites ou bitmaps
-pré-carregados — cada frame é desenhado pixel a pixel com geometria pura,
-garantindo o menor uso de RAM possível.
-
-## Ligação I2C (Raspberry Pi)
+## Arquitetura
 
 ```
-Display SSD1306   →   Raspberry Pi
-VCC               →   3.3V  (pino 1)
-GND               →   GND   (pino 6)
-SDA               →   GPIO2 (pino 3)
-SCL               →   GPIO3 (pino 5)
+main.py            entrada: janela (padrão), --voz, --texto
+bmo/
+├── app.py         orquestra: janela (thread principal) + voz (worker)
+├── janela.py      janela flutuante topmost, arrastável
+├── face.py        rosto OLED 128x64: estados e emoções
+├── ears.py        escuta: wake word local (Vosk/Porcupine) + STT Google
+├── mouth.py       fala: edge-tts com voz do BMO ("Bímo")
+├── brain/         cérebro: Gemini/Groq + loop de function calling
+└── hands/         ferramentas: apps, arquivos, shell, internet, lembretes
+modelos/           modelo Vosk pt-BR + params do Porcupine
 ```
-
-## Cores do BMO
-
-| Elemento      | Hex       | RGB           |
-|---------------|-----------|---------------|
-| Corpo         | `#3ec9a7` | (62, 201, 167)|
-| Face/Tela     | `#2aa88a` | (42, 168, 138)|
-| Branco olho   | `#dff5ec` | (223, 245, 236)|
-| Pupila        | `#0a2820` | (10, 40, 32)  |
-| Boca          | `#1a6650` | (26, 102, 80) |
-| Borda         | `#1a7a5a` | (26, 122, 90) |
-| Bochechas     | `#5ad4b0` | (90, 212, 176)|
-
-> O display SSD1306 de 0.96" é monocromático (1-bit).
-> As cores são usadas apenas na simulação Pygame no PC.
-> Para display colorido, use um SSD1331 ou ST7735 e ajuste o driver.

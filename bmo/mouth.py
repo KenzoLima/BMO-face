@@ -8,9 +8,10 @@ são para o rosto do BMO (bmo_face.py), não para a voz — assim como markdown
 e emojis, que soam mal quando lidos em voz alta.
 
 Configuração via .env (opcionais):
-    BMO_VOZ=pt-BR-FranciscaNeural     # ou pt-BR-AntonioNeural, pt-BR-ThalitaMultilingualNeural
+    BMO_VOZ=pt-BR-AntonioNeural       # masculina amigável; alternativas femininas:
+                                      # pt-BR-FranciscaNeural, pt-BR-ThalitaMultilingualNeural
     BMO_VOZ_VELOCIDADE=+10%
-    BMO_VOZ_TOM=+15Hz                 # tom levemente agudo = mais cara de BMO
+    BMO_VOZ_TOM=+25Hz                 # tom agudo deixa a voz mais jovem, como no desenho
 """
 
 from __future__ import annotations
@@ -32,12 +33,19 @@ _RE_EXPRESSAO = re.compile(
 _RE_MARKDOWN = re.compile(r"[*_`#~]+")
 _RE_EMOJI = re.compile(r"[\U0001F000-\U0001FAFF☀-➿️]")
 
+# Grafia → pronúncia: sem isso o TTS soletra "bê-eme-ó"
+_PRONUNCIAS = [
+    (re.compile(r"\bBMO\b", re.IGNORECASE), "Bímo"),
+]
+
 
 def limpar_para_fala(texto: str) -> str:
-    """Remove tudo que faz sentido na tela mas não na voz."""
+    """Remove o que só faz sentido na tela e ajusta pronúncias para a voz."""
     texto = _RE_EXPRESSAO.sub("", texto)
     texto = _RE_MARKDOWN.sub("", texto)
     texto = _RE_EMOJI.sub("", texto)
+    for padrao, pronuncia in _PRONUNCIAS:
+        texto = padrao.sub(pronuncia, texto)
     return " ".join(texto.split())
 
 
@@ -50,9 +58,9 @@ class Boca:
         velocidade: str | None = None,
         tom: str | None = None,
     ):
-        self.voz = voz or os.getenv("BMO_VOZ", "pt-BR-FranciscaNeural")
+        self.voz = voz or os.getenv("BMO_VOZ", "pt-BR-AntonioNeural")
         self.velocidade = velocidade or os.getenv("BMO_VOZ_VELOCIDADE", "+10%")
-        self.tom = tom or os.getenv("BMO_VOZ_TOM", "+15Hz")
+        self.tom = tom or os.getenv("BMO_VOZ_TOM", "+25Hz")
 
     # ── Síntese ──────────────────────────────────────────────────────────
 
@@ -78,7 +86,8 @@ class Boca:
     # ── Reprodução ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _tocar(caminho: str) -> None:
+    def tocar(caminho: str) -> None:
+        """Toca um áudio já sintetizado (ex.: frases fixas em cache)."""
         import pygame  # lazy: só carrega se realmente formos tocar áudio
 
         if not pygame.mixer.get_init():
@@ -101,7 +110,7 @@ class Boca:
         if caminho is None:
             return False
         try:
-            self._tocar(caminho)
+            self.tocar(caminho)
         finally:
             try:
                 os.remove(caminho)
