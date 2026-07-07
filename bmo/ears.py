@@ -91,10 +91,13 @@ class Ouvidos:
             return texto
         return None
 
-    def ouvir_comando(self, fonte) -> str | None:
-        """Escuta ativa: captura o comando completo após a wake word."""
+    def ouvir_comando(self, fonte, timeout: float = 10) -> str | None:
+        """Escuta ativa: captura o comando completo após a wake word.
+
+        ``timeout`` menor é usado no modo conversa (respostas encadeadas).
+        """
         try:
-            audio = self.reconhecedor.listen(fonte, timeout=10, phrase_time_limit=15)
+            audio = self.reconhecedor.listen(fonte, timeout=timeout, phrase_time_limit=15)
         except sr.WaitTimeoutError:
             return None
 
@@ -164,11 +167,11 @@ class OuvidosPorcupine:
             gravador.stop()
             gravador.delete()
 
-    def ouvir_comando(self) -> str | None:
+    def ouvir_comando(self, timeout: float = 10) -> str | None:
         """Escuta ativa via Google (1 requisição por comando)."""
         with sr.Microphone() as fonte:
             self._google.calibrar(fonte, duracao=0.5)
-            return self._google.ouvir_comando(fonte)
+            return self._google.ouvir_comando(fonte, timeout=timeout)
 
     def encerrar(self) -> None:
         self.porcupine.delete()
@@ -287,11 +290,11 @@ class OuvidosVosk:
             fluxo.close()
             audio.terminate()
 
-    def ouvir_comando(self) -> str | None:
+    def ouvir_comando(self, timeout: float = 10) -> str | None:
         """Escuta ativa via Google (1 requisição por comando)."""
         with sr.Microphone() as fonte:
             self._google.calibrar(fonte, duracao=0.5)
-            return self._google.ouvir_comando(fonte)
+            return self._google.ouvir_comando(fonte, timeout=timeout)
 
     def encerrar(self) -> None:
         pass  # o modelo é liberado com o processo

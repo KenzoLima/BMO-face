@@ -16,10 +16,7 @@ dependência opcional não quebre o outro provedor.
 
 from __future__ import annotations
 
-import json
 import os
-
-from bmo.hands import executar_ferramenta, schemas_gemini, schemas_openai
 
 from .prompts import system_prompt_atual
 
@@ -34,6 +31,7 @@ class ProvedorGemini:
     def __init__(self, modelo: str | None = None):
         from google import genai
         from google.genai import types
+        from bmo.hands import schemas_gemini
 
         chave = os.getenv("GOOGLE_API_KEY")
         if not chave:
@@ -61,6 +59,8 @@ class ProvedorGemini:
         ]
 
     def responder(self, texto: str, historico: list[dict]) -> str:
+        from bmo.hands import executar_ferramenta
+
         t = self._types
         contents = self._converter_historico(historico)
         contents.append(t.Content(role="user", parts=[t.Part.from_text(text=texto)]))
@@ -113,6 +113,10 @@ class ProvedorGroq:
         self.modelo = modelo or os.getenv("BMO_MODEL_GROQ", "llama-3.3-70b-versatile")
 
     def responder(self, texto: str, historico: list[dict]) -> str:
+        import json
+
+        from bmo.hands import executar_ferramenta, schemas_openai
+
         mensagens: list = [{"role": "system", "content": system_prompt_atual()}]
         mensagens += historico
         mensagens.append({"role": "user", "content": texto})

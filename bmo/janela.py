@@ -48,6 +48,26 @@ SWP_NOACTIVATE = 0x0010
 MARGEM_CANTO = 24
 
 
+def _icone_janela() -> "pygame.Surface":
+    """Ícone da barra de tarefas: corpo quadrado com o rosto clássico."""
+    from .face import OLED_H, OLED_W, FrameBuffer, RostoBMO
+
+    fb = FrameBuffer()
+    RostoBMO(fb).draw_idle(16)  # frame sem piscada e sem cursor
+
+    corpo = pygame.Surface((128, 128))
+    corpo.fill(COR_BORDA)
+    pygame.draw.rect(corpo, COR_CORPO, pygame.Rect(4, 4, 120, 120), border_radius=18)
+
+    rosto = pygame.Surface((OLED_W, OLED_H), pygame.SRCALPHA)
+    for y in range(OLED_H):
+        for x in range(OLED_W):
+            if fb.get(x, y):
+                rosto.set_at((x, y), COR_PIXEL)
+    corpo.blit(pygame.transform.smoothscale(rosto, (124, 62)), (2, 33))
+    return pygame.transform.smoothscale(corpo, (32, 32))
+
+
 class JanelaBMO:
     def __init__(self, escala: int = 2, fps: int = 30):
         self.escala = escala
@@ -64,6 +84,7 @@ class JanelaBMO:
 
         pygame.init()
         pygame.display.set_caption("BMO")
+        pygame.display.set_icon(_icone_janela())  # carinha na barra de tarefas
         self.tela = pygame.display.set_mode(
             (self.largura, self.altura), pygame.NOFRAME
         )
@@ -74,6 +95,8 @@ class JanelaBMO:
         self._arrastando = False
         self._offset_arraste = (0, 0)
         self._area_fechar = pygame.Rect(self.largura - 18, 2, 16, 16)
+        self._area_config = pygame.Rect(self.largura - 38, 2, 16, 16)
+        self.abrir_config_pedido = False  # setado pelo clique na engrenagem
 
         self._posicionar_no_canto()
         self.fixar_no_topo()
@@ -126,6 +149,9 @@ class JanelaBMO:
             if evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
                 if self._area_fechar.collidepoint(evento.pos):
                     return False
+                if self._area_config.collidepoint(evento.pos):
+                    self.abrir_config_pedido = True
+                    continue
                 cx, cy = self._posicao_cursor()
                 jx, jy = self._posicao_janela()
                 self._arrastando = True
@@ -156,7 +182,7 @@ class JanelaBMO:
             self.tela, COR_BORDA, self.tela.get_rect(), width=2, border_radius=6
         )
 
-        # botão de fechar só quando o mouse está sobre a janela
+        # botões (fechar + engrenagem) só quando o mouse está sobre a janela
         if pygame.mouse.get_focused():
             centro = self._area_fechar.center
             pygame.draw.circle(self.tela, COR_FECHAR, centro, 7)
@@ -166,6 +192,16 @@ class JanelaBMO:
                     (centro[0] - 3, centro[1] + dx),
                     (centro[0] + 3, centro[1] - dx), 2,
                 )
+            # engrenagem: círculo com "dentes" (Tela 3 do esboço)
+            cx, cy = self._area_config.center
+            pygame.draw.circle(self.tela, COR_BORDA, (cx, cy), 7)
+            for ang in range(0, 360, 60):
+                import math as _m
+
+                px = cx + round(8 * _m.cos(_m.radians(ang)))
+                py = cy + round(8 * _m.sin(_m.radians(ang)))
+                pygame.draw.circle(self.tela, COR_BORDA, (px, py), 2)
+            pygame.draw.circle(self.tela, COR_CORPO, (cx, cy), 3)
 
         pygame.display.flip()
         self.clock.tick(self.fps)

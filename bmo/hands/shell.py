@@ -7,6 +7,7 @@ A saída é truncada para não estourar o contexto do modelo.
 
 from __future__ import annotations
 
+import re
 import subprocess
 
 from .registry import ferramenta
@@ -31,6 +32,17 @@ PADROES_BLOQUEADOS = [
     "vssadmin delete",
     "bcdedit",
     "mkfs",
+]
+
+PADROES_REGEX_BLOQUEADOS = [
+    r"\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b.*\|\s*(iex|invoke-expression)",
+    r"\bstart-process\b.*\b(-verb\s+runas|powershell|cmd)\b",
+    r"\bset-executionpolicy\b",
+    r"\bnew-localuser\b",
+    r"\badd-localgroupmember\b",
+    r"\btakeown\b",
+    r"\bicacls\b.*\b/grant\b",
+    r"\bremove-item\b.*\b-recurse\b.*\b-force\b",
 ]
 
 LIMITE_SAIDA = 3000  # caracteres por stream (stdout/stderr)
@@ -81,6 +93,15 @@ def executar_comando(comando: str, timeout_segundos: int = 30) -> dict:
                 "erro": (
                     f"Comando bloqueado por segurança (padrão '{padrao.strip()}'). "
                     "BMO não executa ações destrutivas no sistema."
+                ),
+            }
+    for padrao in PADROES_REGEX_BLOQUEADOS:
+        if re.search(padrao, comando_lower):
+            return {
+                "sucesso": False,
+                "erro": (
+                    "Comando bloqueado por segurança. BMO não executa elevação, "
+                    "download-e-execução nem alterações agressivas de permissões."
                 ),
             }
 

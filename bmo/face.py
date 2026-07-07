@@ -25,6 +25,7 @@ OLED_H = 64
 
 SEGUNDOS_EXIBINDO_EMOCAO = 3.0   # após falar, segura a emoção no rosto
 SEGUNDOS_ATE_DORMIR = 90.0       # standby prolongado → rosto sonolento
+JANELA_ENVELOPE = 0.05           # lip sync: 1 amostra de amplitude a cada 50ms
 
 _RE_EMOCAO = re.compile(
     r"\[(feliz|pensativo|surpreso|triste|focado|dormindo)\]", re.IGNORECASE
@@ -46,13 +47,34 @@ class EstadoBMO:
         self.emocao: str | None = None
         self.detalhe = ""          # ex.: mensagem de erro curta
         self.desde = time.monotonic()
+        self.envelope: list[float] | None = None  # amplitudes da fala atual
 
     def mudar(self, modo: str, emocao: str | None = None, detalhe: str = "") -> None:
         with self._lock:
             self.modo = modo
             self.emocao = emocao
             self.detalhe = detalhe
+            self.envelope = None
             self.desde = time.monotonic()
+
+    def iniciar_fala(self, envelope: list[float] | None, emocao: str | None = None) -> None:
+        """Chamado no instante em que o áudio COMEÇA a tocar — o relógio do
+        lip sync parte daqui."""
+        with self._lock:
+            self.modo = "falando"
+            self.emocao = emocao
+            self.envelope = envelope or None
+            self.desde = time.monotonic()
+
+    def amplitude_boca(self) -> float | None:
+        """Amplitude (0..1) da fala neste instante; None = sem lip sync."""
+        with self._lock:
+            if self.modo != "falando" or not self.envelope:
+                return None
+            indice = int((time.monotonic() - self.desde) / JANELA_ENVELOPE)
+            if indice >= len(self.envelope):
+                return 0.0
+            return self.envelope[indice]
 
     def ler(self) -> tuple[str, str | None, float]:
         with self._lock:
@@ -224,6 +246,7 @@ class RostoBMO:
         self.fb.hline(self.MX - 10, self.MY + 1, 20)
 
     def _mouth_speaking(self, frame):
+        """Animação genérica (fallback quando não há envelope de áudio)."""
         mx, my = self.MX, self.MY
         f = (frame // 4) % 4
         if f == 0:
@@ -234,6 +257,20 @@ class RostoBMO:
             self.fb.circle(mx, my, 5)
         else:
             self.fb.rounded_rect(mx - 15, my - 2, 30, 4, 2)
+
+    def _mouth_sync(self, amplitude: float):
+        """Boca guiada pelo volume da voz (lip sync): fechada no silêncio,
+        escancarada nos picos."""
+        mx, my = self.MX, self.MY
+        if amplitude < 0.12:    # pausa/respiro → boca fechada
+            self.fb.rounded_rect(mx - 10, my - 1, 20, 3, 1)
+        elif amplitude < 0.35:  # fala baixa → boca pequena
+            self.fb.circle(mx, my, 4)
+        elif amplitude < 0.65:  # fala média → boca aberta larga
+            self.fb.rounded_rect(mx - 12, my - 5, 24, 10, 5)
+        else:                   # pico → escancarada, com "garganta"
+            self.fb.rounded_rect(mx - 9, my - 8, 18, 17, 6)
+            self.fb.rounded_rect(mx - 5, my + 2, 10, 5, 2, on=False)
 
     # ── estados ──────────────────────────────────────────────────────────
     def draw_idle(self, frame):
@@ -268,12 +305,15 @@ class RostoBMO:
         for i in range(pontos):
             self.fb.circle(52 + i * 12, 56, 2)
 
-    def draw_speaking(self, frame):
+    def draw_speaking(self, frame, amplitude: float | None = None):
         self.fb.clear()
         blink = (frame % 100) < 4
         self._eye_normal(*self.EL, blink)
         self._eye_normal(*self.ER, blink)
-        self._mouth_speaking(frame)
+        if amplitude is None:
+            self._mouth_speaking(frame)
+        else:
+            self._mouth_sync(amplitude)
 
     def draw_happy(self, frame):
         self.fb.clear()
@@ -331,16 +371,60 @@ class RostoBMO:
             self.fb.rect(62, 17, 4, 3)
 
     def draw_boot(self, frame):
+        """Tela 1 do esboço: 'BEM VINDO!' + barra de carregamento."""
         self.fb.clear()
-        self.fb.rounded_rect(2, 2, 124, 60, 14, fill=False)
-        p = min(frame / 80.0, 1.0)
-        _draw_bmo_logo(self.fb, 44, 10)
-        self.fb.rounded_rect(18, 32, 92, 10, 4, fill=False)
-        if p > 0:
-            self.fb.rounded_rect(19, 33, round(90 * p), 8, 3)
-        if p >= 1.0 and (frame // 12) % 2 == 0:
-            self.fb.hline(52, 50, 24)
-            self.fb.hline(52, 51, 24)
+        _texto_pixel(self.fb, "BEM VINDO!", 35, 14)
+        # a barra enche em ~4s e fica pulsando perto do fim enquanto carrega
+        p = min(frame / 120.0, 0.95)
+        self.fb.rounded_rect(18, 36, 92, 10, 4, fill=False)
+        self.fb.rounded_rect(19, 37, max(4, round(90 * p)), 8, 3)
+        if (frame // 15) % 2 == 0:  # cursor piscante estilo terminal
+            self.fb.rounded_rect(14, OLED_H - 11, 5, 4, 2)
+
+    def draw_apresentacao(self, frame, progresso: float):
+        """Tela 1 → Tela 2 do esboço: as letras e a barra se dissolvem,
+        pixel a pixel, no rosto do BMO."""
+        origem = FrameBuffer()
+        RostoBMO(origem).draw_boot(120)  # boot com a barra cheia
+        destino = FrameBuffer()
+        RostoBMO(destino).draw_idle(frame)
+
+        self.fb.clear()
+        for y in range(OLED_H):
+            for x in range(OLED_W):
+                fonte = destino if _limiar_dissolucao(x, y) < progresso else origem
+                if fonte.get(x, y):
+                    self.fb.pixel(x, y)
+
+
+# Fonte pixelada 5x7 (só os glifos usados nas telas do BMO)
+_FONTE_5X7 = {
+    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
+    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
+    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
+    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
+    "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
+    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
+    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
+    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "!": ("00100", "00100", "00100", "00100", "00100", "00000", "00100"),
+    " ": ("00000",) * 7,
+}
+
+
+def _texto_pixel(fb: FrameBuffer, texto: str, x: int, y: int) -> None:
+    for ch in texto.upper():
+        linhas = _FONTE_5X7.get(ch, _FONTE_5X7[" "])
+        for dy, linha in enumerate(linhas):
+            for dx, bit in enumerate(linha):
+                if bit == "1":
+                    fb.pixel(x + dx, y + dy)
+        x += 6
+
+
+def _limiar_dissolucao(x: int, y: int) -> float:
+    """Ruído determinístico por pixel (0..1) — dita a ordem da dissolução."""
+    return ((x * 73_856_093) ^ (y * 19_349_663)) % 997 / 997.0
 
 
 def _draw_bmo_logo(fb: FrameBuffer, x: int, y: int) -> None:
@@ -368,10 +452,22 @@ _EMOCAO_PARA_DRAW = {
 }
 
 
+DURACAO_APRESENTACAO = 1.4  # segundos da dissolução boot → rosto
+
+
 def desenhar_estado(rosto: RostoBMO, estado: EstadoBMO, frame: int) -> str:
     """Desenha o frame certo para o estado atual. Retorna o nome do desenho
     usado (para testes e depuração)."""
     modo, emocao, ha_quanto = estado.ler()
+
+    if modo == "apresentacao":
+        progresso = min(1.0, ha_quanto / DURACAO_APRESENTACAO)
+        rosto.draw_apresentacao(frame, progresso)
+        return "draw_apresentacao"
+
+    if modo == "falando":
+        rosto.draw_speaking(frame, amplitude=estado.amplitude_boca())
+        return "draw_speaking"
 
     if modo == "boot":
         nome = "draw_boot"
@@ -379,8 +475,6 @@ def desenhar_estado(rosto: RostoBMO, estado: EstadoBMO, frame: int) -> str:
         nome = "draw_listening"
     elif modo == "processando":
         nome = "draw_thinking"
-    elif modo == "falando":
-        nome = "draw_speaking"
     elif modo == "erro":
         nome = "draw_error"
     else:  # standby

@@ -34,27 +34,28 @@ def _dir_instalacao() -> Path:
     return Path(__file__).parent
 
 
-def _preparar_env() -> None:
-    """Garante um .env ao lado do programa e o carrega."""
+def _preparar_env(forcar: bool = False) -> None:
+    """Garante um .env ao lado do programa e o carrega.
+
+    ``forcar=True`` recarrega valores já definidos (usado após salvar
+    a tela de configurações).
+    """
     caminho = _dir_instalacao() / ".env"
     if not caminho.exists():
         try:
             caminho.write_text(MODELO_ENV, encoding="utf-8")
         except OSError:
             pass  # pasta somente leitura: segue com variáveis do sistema
-    load_dotenv(caminho)
+    load_dotenv(caminho, override=forcar)
     load_dotenv()  # .env do diretório atual, se houver, complementa
 
 
 _preparar_env()
 
-from bmo.brain import Cerebro  # noqa: E402 - precisa do .env carregado antes
-from bmo.mouth import Boca  # noqa: E402
-
 COMANDOS_SAIR = {"sair", "tchau", "exit", "quit", "tchau bimo", "até mais"}
 
 
-def falar_com_seguranca(boca: Boca | None, texto: str) -> Boca | None:
+def falar_com_seguranca(boca, texto: str):
     """Fala o texto; se a voz falhar, avisa e desliga a voz desta sessão."""
     if boca is None:
         return None
@@ -66,7 +67,9 @@ def falar_com_seguranca(boca: Boca | None, texto: str) -> Boca | None:
         return None
 
 
-def criar_cerebro() -> Cerebro:
+def criar_cerebro():
+    from bmo.brain import Cerebro
+
     print("BMO inicializando...")
     cerebro = Cerebro()
     reserva = cerebro.reserva.nome if cerebro.reserva else "nenhuma"
@@ -74,7 +77,7 @@ def criar_cerebro() -> Cerebro:
     return cerebro
 
 
-def modo_texto(cerebro: Cerebro) -> None:
+def modo_texto(cerebro) -> None:
     print("BMO: Oi! O que vamos fazer hoje? (digite 'sair' para encerrar)\n")
 
     while True:
@@ -95,42 +98,51 @@ def modo_texto(cerebro: Cerebro) -> None:
         print(f"BMO: {resposta}\n")
 
 
-def _atender(cerebro: Cerebro, boca: Boca | None, comando: str) -> tuple[Boca | None, bool]:
-    """Processa um comando falado. Retorna (boca, continuar_o_loop)."""
-    print(f"---> Você: {comando}")
-    if comando.lower() in COMANDOS_SAIR:
-        print("BMO: Até mais!")
-        falar_com_seguranca(boca, "Até mais!")
-        return boca, False
+def _conversar(cerebro, boca, ouvir_comando):
+    """Conversa em turnos após a wake word: continua ouvindo até uma frase
+    de encerramento ("obrigado", "só isso"...) ou silêncio."""
+    from bmo.app import FRASES_ENCERRAR, TIMEOUT_PRIMEIRO_COMANDO, _timeout_conversa
 
-    print("BMO: [computando...]")
-    resposta = cerebro.responder(comando)
-    print(f"BMO: {resposta}\n")
-    return falar_com_seguranca(boca, resposta), True
+    primeiro = True
+    while True:
+        timeout = TIMEOUT_PRIMEIRO_COMANDO if primeiro else _timeout_conversa()
+        comando = ouvir_comando(timeout)
+
+        if not comando:
+            print("BMO: [assunto encerrado — me chame de novo com 'bimo']\n")
+            return boca
+
+        print(f"---> Você: {comando}")
+        if comando.lower().strip() in FRASES_ENCERRAR:
+            print("BMO: Até mais!")
+            return falar_com_seguranca(boca, "Até mais!")
+
+        primeiro = False
+        print("BMO: [computando...]")
+        resposta = cerebro.responder(comando)
+        print(f"BMO: {resposta}")
+        boca = falar_com_seguranca(boca, resposta)
+        print("BMO: [ouvindo — continue, ou silêncio/'só isso' encerra]\n")
 
 
-def _loop_local(cerebro: Cerebro, ouvidos, boca: Boca | None, ack: str | None) -> None:
+def _loop_local(cerebro, ouvidos, boca, ack: str | None) -> None:
     """Escuta passiva LOCAL (Porcupine ou Vosk): zero requisições em espera."""
     print("BMO: Pronto! Escuta local ativa. Diga 'Bimo'! (Ctrl+C encerra)\n")
+    from bmo.mouth import Boca
+
     while True:
         ouvidos.esperar_wake_word()  # bloqueia, offline
         print("BMO: Oi! Pode falar!")
         if ack:
             Boca.tocar(ack)
-
-        comando = ouvidos.ouvir_comando()
-        if not comando:
-            print("BMO: Não entendi... me chame de novo!\n")
-            continue
-
-        boca, continuar = _atender(cerebro, boca, comando)
-        if not continuar:
-            break
+        boca = _conversar(cerebro, boca, ouvidos.ouvir_comando)
 
 
-def _loop_google(cerebro: Cerebro, ouvidos, boca: Boca | None, ack: str | None) -> None:
+def _loop_google(cerebro, ouvidos, boca, ack: str | None) -> None:
     """Escuta passiva via API do Google (fallback: gasta requisições)."""
     with ouvidos.abrir_microfone() as fonte:
+        from bmo.mouth import Boca
+
         print("BMO: Calibrando o microfone...")
         limiar = ouvidos.calibrar(fonte)
         print(f"[limiar de energia: {limiar:.0f}]")
@@ -144,19 +156,15 @@ def _loop_google(cerebro: Cerebro, ouvidos, boca: Boca | None, ack: str | None) 
             print(f"BMO: Oi! (gatilho: '{gatilho}') Pode falar!")
             if ack:
                 Boca.tocar(ack)
-
-            comando = ouvidos.ouvir_comando(fonte)
-            if not comando:
-                print("BMO: Não entendi... me chame de novo!\n")
-                continue
-
-            boca, continuar = _atender(cerebro, boca, comando)
-            if not continuar:
-                break
+            boca = _conversar(
+                cerebro, boca,
+                lambda t: ouvidos.ouvir_comando(fonte, timeout=t),
+            )
 
 
-def modo_voz(cerebro: Cerebro) -> None:
+def modo_voz(cerebro) -> None:
     from bmo.ears import OuvidosPorcupine, OuvidosVosk, criar_ouvidos
+    from bmo.mouth import Boca
 
     ouvidos = criar_ouvidos()  # Porcupine → Vosk → Google
     escuta_local = isinstance(ouvidos, (OuvidosPorcupine, OuvidosVosk))
@@ -191,7 +199,24 @@ def main() -> None:
     parser.add_argument(
         "--voz", action="store_true", help="modo voz no terminal (sem janela)"
     )
+    parser.add_argument(
+        "--config", action="store_true", help="abre só a tela de configurações"
+    )
     args = parser.parse_args()
+
+    if args.config:
+        from bmo.config_ui import abrir_configuracoes
+
+        abrir_configuracoes()
+        return
+
+    # primeira execução: sem chave, abre a tela de boas-vindas (Tela 3 do esboço)
+    if not os.getenv("GOOGLE_API_KEY"):
+        from bmo.config_ui import abrir_configuracoes
+
+        if not abrir_configuracoes(primeira_vez=True):
+            return  # usuário fechou sem salvar
+        _preparar_env(forcar=True)  # recarrega o .env que acabou de ser salvo
 
     if not args.texto and not args.voz:
         try:

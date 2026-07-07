@@ -57,8 +57,23 @@ class Cerebro:
         if not texto:
             return "[pensativo] Você não disse nada... pode repetir?"
 
+        # memória de longo prazo: busca LOCAL no caderno (zero requisições);
+        # trechos relevantes pegam carona na requisição que já vai acontecer
+        texto_para_llm = texto
         try:
-            resposta = self.provedor.responder(texto, self.historico)
+            from bmo.hands.notes import memorias_relevantes
+
+            memorias = memorias_relevantes(texto)
+            if memorias:
+                texto_para_llm = (
+                    f"{texto}\n\n[Do caderno permanente do usuário — trechos "
+                    f"possivelmente relevantes:\n{memorias}\n]"
+                )
+        except Exception:
+            pass  # caderno nunca pode derrubar uma resposta
+
+        try:
+            resposta = self.provedor.responder(texto_para_llm, self.historico)
         except Exception as erro_primario:
             print(f"[BMO] Provedor '{self.provedor.nome}' falhou: {erro_primario}")
             if self.reserva is None:
@@ -68,7 +83,7 @@ class Cerebro:
                 )
             print(f"[BMO] Tentando reserva '{self.reserva.nome}'...")
             try:
-                resposta = self.reserva.responder(texto, self.historico)
+                resposta = self.reserva.responder(texto_para_llm, self.historico)
             except Exception as erro_reserva:
                 print(f"[BMO] Reserva também falhou: {erro_reserva}")
                 return "[triste] Meus dois cérebros falharam... Tente mais tarde?"

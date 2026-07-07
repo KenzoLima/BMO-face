@@ -15,6 +15,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=saida
 OutputBaseFilename=BMO-Setup-{#Versao}
+SetupIconFile=bmo.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

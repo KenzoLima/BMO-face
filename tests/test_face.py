@@ -98,6 +98,37 @@ def test_estados_desenham_pixels_diferentes():
     )
 
 
+def test_boot_mostra_bem_vindo_e_barra():
+    fb, rosto = novo_rosto()
+    rosto.draw_boot(60)
+    assert any(fb.buf)  # tem pixels (texto + barra)
+
+
+def test_apresentacao_interpola_boot_e_rosto():
+    fb, rosto = novo_rosto()
+
+    rosto.draw_apresentacao(16, progresso=0.0)
+    inicio = bytes(fb.buf)
+    rosto.draw_boot(120)
+    assert inicio == bytes(fb.buf)  # progresso 0 = tela de boot
+
+    rosto.draw_apresentacao(16, progresso=1.0)
+    fim = bytes(fb.buf)
+    rosto.draw_idle(16)
+    assert fim == bytes(fb.buf)  # progresso 1 = rosto
+
+    rosto.draw_apresentacao(16, progresso=0.5)
+    meio = bytes(fb.buf)
+    assert meio != inicio and meio != fim  # no meio é a mistura
+
+
+def test_modo_apresentacao_no_mapeamento():
+    fb, rosto = novo_rosto()
+    estado = EstadoBMO()
+    estado.mudar("apresentacao")
+    assert desenhar_estado(rosto, estado, 0) == "draw_apresentacao"
+
+
 def test_animacao_da_boca_muda_entre_frames():
     fb, rosto = novo_rosto()
     estado = EstadoBMO()
@@ -107,3 +138,53 @@ def test_animacao_da_boca_muda_entre_frames():
     desenhar_estado(rosto, estado, frame=6)
     frame_b = _assinatura(fb)
     assert frame_a != frame_b
+
+
+# ── lip sync ────────────────────────────────────────────────────────────────
+
+def test_amplitude_segue_o_relogio_do_envelope():
+    from bmo.face import JANELA_ENVELOPE
+
+    estado = EstadoBMO()
+    estado.iniciar_fala([0.1, 0.9, 0.2])
+
+    estado.desde = time.monotonic()  # agora → janela 0
+    assert estado.amplitude_boca() == 0.1
+
+    estado.desde = time.monotonic() - JANELA_ENVELOPE * 1.5  # meio da janela 1
+    assert estado.amplitude_boca() == 0.9
+
+    estado.desde = time.monotonic() - JANELA_ENVELOPE * 10  # fala acabou
+    assert estado.amplitude_boca() == 0.0
+
+
+def test_sem_envelope_amplitude_e_none_e_boca_usa_fallback():
+    estado = EstadoBMO()
+    estado.iniciar_fala(None)
+    assert estado.amplitude_boca() is None
+
+    estado.mudar("standby")
+    assert estado.amplitude_boca() is None
+
+
+def test_boca_abre_conforme_a_amplitude():
+    fb, rosto = novo_rosto()
+    formas = {}
+    for amplitude in (0.05, 0.25, 0.5, 0.9):
+        rosto.draw_speaking(16, amplitude=amplitude)
+        formas[amplitude] = _assinatura(fb)
+        assert any(fb.buf)
+
+    # cada faixa de volume produz uma boca diferente
+    assert len(set(formas.values())) == 4
+
+    # boca fechada (silêncio) tem menos pixels acesos que escancarada (pico)
+    pixels = {a: sum(bin(b).count("1") for b in formas[a]) for a in formas}
+    assert pixels[0.05] < pixels[0.9]
+
+
+def test_mudar_de_estado_limpa_o_envelope():
+    estado = EstadoBMO()
+    estado.iniciar_fala([0.5])
+    estado.mudar("standby")
+    assert estado.envelope is None

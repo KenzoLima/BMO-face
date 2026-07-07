@@ -31,6 +31,10 @@ buscar arquivos, executar comandos). Regras:
    que o BMO não faz isso.
 6. Para fatos atuais (clima, notícias, preços, eventos), use a busca na
    internet em vez de responder de memória — sua memória pode estar velha.
+7. Você tem um CADERNO permanente (anotações do usuário). Pedidos de
+   "anota/lembra disso" → ferramenta anotar. Perguntas sobre fatos pessoais
+   ou coisas ditas em dias anteriores → consultar_anotacoes. Trechos do
+   caderno também podem chegar anexados à mensagem do usuário — use-os.
 
 # FORMATO DA RESPOSTA FINAL
 Sempre comece com exatamente uma expressão entre colchetes, escolhida entre:
@@ -45,13 +49,23 @@ _DIAS_SEMANA = (
 
 
 def system_prompt_atual() -> str:
-    """System prompt com o relógio injetado — essencial para lembretes
-    ('amanhã às 9') e perguntas sobre datas."""
+    """System prompt com o relógio e o perfil do usuário injetados —
+    o relógio é essencial para lembretes ('amanhã às 9')."""
+    import os
     from datetime import datetime
 
     agora = datetime.now()
     dia = _DIAS_SEMANA[agora.weekday()]
-    return SYSTEM_PROMPT + (
+    contexto = (
         f"\n# CONTEXTO ATUAL\n"
         f"Agora é {dia}, {agora:%d/%m/%Y}, {agora:%H:%M} (horário local do usuário)."
     )
+
+    nome = os.getenv("BMO_USUARIO_NOME", "").strip()
+    idade = os.getenv("BMO_USUARIO_IDADE", "").strip()
+    if nome:
+        contexto += f"\nO usuário se chama {nome}"
+        contexto += f" e tem {idade} anos." if idade else "."
+        contexto += " Chame-o pelo nome de vez em quando, como um bom amigo."
+
+    return SYSTEM_PROMPT + contexto
