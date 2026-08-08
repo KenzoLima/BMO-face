@@ -14,8 +14,15 @@ Este módulo é o contrato entre as "mãos" do BMO e qualquer LLM:
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+# Teto de tempo de UMA ferramenta. Existe porque uma ferramenta pendurada
+# (busca na internet sem resposta, PowerShell travado) segurava a thread de
+# voz para sempre: o BMO ficava calado e parecia morto, sem erro nenhum.
+# Melhor devolver "demorei demais" ao modelo do que nunca mais responder.
+TIMEOUT_PADRAO = 30.0
 
 
 @dataclass(frozen=True)
@@ -24,18 +31,28 @@ class Ferramenta:
     descricao: str
     parametros: dict[str, Any] = field(default_factory=dict)  # JSON Schema
     executar: Callable[..., dict] = None  # type: ignore[assignment]
+    timeout: float = TIMEOUT_PADRAO
 
 
 _REGISTRO: dict[str, Ferramenta] = {}
 
 
-def ferramenta(nome: str, descricao: str, parametros: dict[str, Any]):
-    """Decorador que registra uma função Python como ferramenta do agente."""
+def ferramenta(
+    nome: str,
+    descricao: str,
+    parametros: dict[str, Any],
+    timeout: float = TIMEOUT_PADRAO,
+):
+    """Decorador que registra uma função Python como ferramenta do agente.
+
+    ``timeout`` é o teto de tempo desta ferramenta; ferramentas que legitimamente
+    demoram (um comando de shell longo) declaram o seu.
+    """
 
     def decorador(func: Callable[..., dict]) -> Callable[..., dict]:
         if nome in _REGISTRO:
             raise ValueError(f"Ferramenta duplicada: '{nome}'")
-        _REGISTRO[nome] = Ferramenta(nome, descricao, parametros, func)
+        _REGISTRO[nome] = Ferramenta(nome, descricao, parametros, func, timeout)
         return func
 
     return decorador
@@ -81,9 +98,34 @@ def executar_ferramenta(nome: str, argumentos: dict[str, Any] | None = None) -> 
             "erro": f"Ferramenta desconhecida: '{nome}'. "
             f"Disponíveis: {sorted(_REGISTRO)}",
         }
-    try:
-        return alvo.executar(**(argumentos or {}))
-    except TypeError as e:
-        return {"sucesso": False, "erro": f"Argumentos inválidos para '{nome}': {e}"}
-    except Exception as e:  # nunca derrubar o loop do agente por causa de uma tool
-        return {"sucesso": False, "erro": f"Falha ao executar '{nome}': {e}"}
+
+    saida: dict[str, Any] = {}
+
+    def rodar() -> None:
+        try:
+            saida["resultado"] = alvo.executar(**(argumentos or {}))
+        except TypeError as e:
+            saida["resultado"] = {
+                "sucesso": False, "erro": f"Argumentos inválidos para '{nome}': {e}"
+            }
+        except Exception as e:  # nunca derrubar o loop do agente por causa de uma tool
+            saida["resultado"] = {
+                "sucesso": False, "erro": f"Falha ao executar '{nome}': {e}"
+            }
+
+    # A ferramenta roda numa thread só para o relógio ser inescapável: uma
+    # chamada de rede pendurada não tem como ser interrompida de fora, então
+    # abandonamos a thread (daemon, morre com o processo) e devolvemos o erro.
+    # Perder uma thread é bem melhor que perder a voz do BMO pelo resto do dia.
+    trabalho = threading.Thread(target=rodar, name=f"bmo-tool-{nome}", daemon=True)
+    trabalho.start()
+    trabalho.join(alvo.timeout)
+    if trabalho.is_alive():
+        return {
+            "sucesso": False,
+            "erro": (
+                f"A ferramenta '{nome}' passou de {alvo.timeout:.0f}s e foi "
+                "abandonada. Responda ao usuário sem ela, ou tente outro caminho."
+            ),
+        }
+    return saida.get("resultado", {"sucesso": False, "erro": f"'{nome}' não retornou nada."})

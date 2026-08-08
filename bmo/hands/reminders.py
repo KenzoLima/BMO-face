@@ -11,6 +11,7 @@ carrega a data/hora, então listar é auto-explicativo.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -27,7 +28,13 @@ LIMITE_MENSAGEM = 120
 
 # Toast nativo via WinRT; o AppId do PowerShell garante que a notificação
 # aparece sem precisar registrar um aplicativo próprio.
-_CONTEUDO_TOAST = """param([string]$Mensagem)
+#
+# A mensagem chega em Base64 de propósito. Ela vem do LLM, que por sua vez lê
+# resultados de busca da internet — ou seja, é texto NÃO CONFIÁVEL indo parar
+# numa linha de comando do PowerShell. Base64 só tem [A-Za-z0-9+/=], então não
+# existe caractere capaz de escapar do argumento e virar comando.
+_CONTEUDO_TOAST = """param([string]$Mensagem64)
+$Mensagem = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Mensagem64))
 $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
 $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
@@ -53,9 +60,25 @@ def _ps(comando: str) -> subprocess.CompletedProcess:
 
 
 def _sanitizar_mensagem(mensagem: str) -> str:
-    """Remove caracteres que quebrariam o comando PowerShell gerado."""
-    mensagem = re.sub(r'["`$\\]', "'", mensagem).strip()
-    return mensagem[:LIMITE_MENSAGEM]
+    """Normaliza o texto do lembrete: sem controles, de tamanho limitado.
+
+    NÃO é a defesa contra injeção — essa é o ``_ps_literal`` (e o Base64 na
+    mensagem do toast). A versão antiga trocava aspas duplas por SIMPLES, que
+    é justamente o caractere capaz de fechar uma string do PowerShell: o
+    "saneamento" abria o buraco que dizia tapar.
+    """
+    mensagem = re.sub(r"[\x00-\x1f\x7f]", " ", str(mensagem))
+    return " ".join(mensagem.split())[:LIMITE_MENSAGEM]
+
+
+def _ps_literal(valor: str) -> str:
+    """Texto como literal PowerShell, já entre aspas simples.
+
+    Dentro de '...' o PowerShell não expande nada — nem ``$``, nem crase, nem
+    ``;`` — então a única fuga possível é a própria aspa simples, que se
+    escapa dobrando. Use SEMPRE isto para interpolar texto de fora.
+    """
+    return "'" + str(valor).replace("'", "''") + "'"
 
 
 def _interpretar_data_hora(data_hora: str) -> datetime | None:
@@ -110,17 +133,21 @@ def criar_lembrete(mensagem: str, data_hora: str) -> dict:
     _garantir_script_toast()
 
     nome = f"Lembrete {momento:%d-%m-%Y %H-%M} ({datetime.now():%H%M%S})"
+    # a mensagem vai em Base64 até o script do toast — ver _CONTEUDO_TOAST
+    mensagem64 = base64.b64encode(mensagem.encode("utf-8")).decode("ascii")
     argumento = (
-        f'-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass '
-        f'-File "{SCRIPT_TOAST}" -Mensagem "{mensagem}"'
+        f"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass "
+        f'-File "{SCRIPT_TOAST}" -Mensagem64 {mensagem64}'
     )
     comando = (
-        f"$acao = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '{argumento}'; "
+        f"$acao = New-ScheduledTaskAction -Execute 'powershell.exe' "
+        f"-Argument {_ps_literal(argumento)}; "
         f"$gatilho = New-ScheduledTaskTrigger -Once -At ([datetime]'{momento:%Y-%m-%dT%H:%M:00}'); "
         f"$config = New-ScheduledTaskSettingsSet -StartWhenAvailable; "
-        f"Register-ScheduledTask -TaskName '{nome}' -TaskPath '{PASTA_TAREFAS}' "
+        f"Register-ScheduledTask -TaskName {_ps_literal(nome)} "
+        f"-TaskPath {_ps_literal(PASTA_TAREFAS)} "
         f"-Action $acao -Trigger $gatilho -Settings $config "
-        f"-Description '{mensagem.replace(chr(39), chr(39) * 2)}' -Force | Out-Null"
+        f"-Description {_ps_literal(mensagem)} -Force | Out-Null"
     )
 
     resultado = _ps(comando)
@@ -182,7 +209,8 @@ def listar_lembretes() -> dict:
 def cancelar_lembrete(nome_tarefa: str) -> dict:
     nome = _sanitizar_mensagem(nome_tarefa)
     comando = (
-        f"Unregister-ScheduledTask -TaskName '{nome}' -TaskPath '{PASTA_TAREFAS}\\' "
+        f"Unregister-ScheduledTask -TaskName {_ps_literal(nome)} "
+        f"-TaskPath {_ps_literal(PASTA_TAREFAS + chr(92))} "
         "-Confirm:$false -ErrorAction Stop"
     )
     resultado = _ps(comando)

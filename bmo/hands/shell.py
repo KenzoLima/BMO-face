@@ -42,7 +42,21 @@ PADROES_REGEX_BLOQUEADOS = [
     r"\badd-localgroupmember\b",
     r"\btakeown\b",
     r"\bicacls\b.*\b/grant\b",
-    r"\bremove-item\b.*\b-recurse\b.*\b-force\b",
+    # Apagar recursivamente à força. As duas ordens de flag importam: a regra
+    # antiga exigia -Recurse ANTES de -Force, e "-Force -Recurse" passava reto.
+    # 'ri' e 'del' são apelidos do Remove-Item no PowerShell.
+    r"\b(remove-item|ri|del|erase)\b.*-recurse\b.*-force\b",
+    r"\b(remove-item|ri|del|erase)\b.*-force\b.*-recurse\b",
+    # Comando embutido em Base64 esconde qualquer coisa da lista acima.
+    r"-e(nc|ncoded|ncodedcommand)?\s+[A-Za-z0-9+/=]{24,}",
+    # Executar texto arbitrário como código anula a lista inteira.
+    r"\b(iex|invoke-expression)\b",
+    r"\[scriptblock\]::create",
+    # Matar processo pelo nome derruba coisa crítica (lsass, explorer...).
+    r"\b(stop-process|taskkill|kill)\b",
+    # Escalada e persistência.
+    r"\bnew-scheduledtask\b|\bschtasks\b.*\/create",
+    r"\bset-mppreference\b|\badd-mppreference\b",  # mexer no Defender
 ]
 
 LIMITE_SAIDA = 3000  # caracteres por stream (stdout/stderr)
@@ -78,6 +92,8 @@ def _truncar(texto: str) -> str:
         },
         "required": ["comando"],
     },
+    # o subprocess já se limita sozinho; o teto aqui só cobre o overhead
+    timeout=TIMEOUT_TETO + 10,
 )
 def executar_comando(comando: str, timeout_segundos: int = 30) -> dict:
     """Roda o comando no PowerShell e devolve o resultado estruturado."""

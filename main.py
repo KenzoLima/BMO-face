@@ -17,6 +17,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from bmo.paths import caminho_env, caminho_env_legado_instalacao
+
 MODELO_ENV = """\
 # Configuracao do BMO - preencha a chave e abra o BMO de novo.
 # Chave gratis do Gemini: https://aistudio.google.com/apikey
@@ -40,14 +42,19 @@ def _preparar_env(forcar: bool = False) -> None:
     ``forcar=True`` recarrega valores já definidos (usado após salvar
     a tela de configurações).
     """
-    caminho = _dir_instalacao() / ".env"
+    caminho = caminho_env()
     if not caminho.exists():
         try:
+            caminho.parent.mkdir(parents=True, exist_ok=True)
             caminho.write_text(MODELO_ENV, encoding="utf-8")
         except OSError:
             pass  # pasta somente leitura: segue com variáveis do sistema
     load_dotenv(caminho, override=forcar)
-    load_dotenv()  # .env do diretório atual, se houver, complementa
+    legado = caminho_env_legado_instalacao()
+    if legado is not None and legado != caminho and legado.exists():
+        load_dotenv(legado, override=False)
+    if not getattr(sys, "frozen", False):
+        load_dotenv()  # .env do diretório atual, se houver, complementa
 
 
 _preparar_env()
@@ -72,8 +79,8 @@ def criar_cerebro():
 
     print("BMO inicializando...")
     cerebro = Cerebro()
-    reserva = cerebro.reserva.nome if cerebro.reserva else "nenhuma"
-    print(f"[cérebro: {cerebro.provedor.nome} | reserva: {reserva}]")
+    # nome_reserva não constrói o provedor — ele só nasce se o primário falhar
+    print(f"[cérebro: {cerebro.provedor.nome} | reserva: {cerebro.nome_reserva or 'nenhuma'}]")
     return cerebro
 
 
@@ -98,6 +105,35 @@ def modo_texto(cerebro) -> None:
         print(f"BMO: {resposta}\n")
 
 
+def _responder_falando(cerebro, boca, comando: str) -> str | None:
+    """Fala a resposta conforme ela chega, imprimindo o texto junto.
+
+    Devolve o texto completo, ou None se a voz falhou (quem chama cai para
+    o modo só-texto). Sem boca, só imprime — sem esperar síntese nenhuma.
+    """
+    pedacos: list[str] = []
+
+    def acompanhando():
+        for pedaco in cerebro.responder_em_partes(comando):
+            pedacos.append(pedaco)
+            print(pedaco, end="", flush=True)
+            yield pedaco
+
+    print("BMO: ", end="", flush=True)
+    if boca is None:
+        texto = "".join(acompanhando())
+        print()
+        return texto
+
+    try:
+        boca.falar_em_partes(acompanhando())
+        print()
+        return "".join(pedacos)
+    except Exception as e:
+        print(f"\n[BMO] Voz indisponível ({e}). Seguindo só com texto.")
+        return None
+
+
 def _conversar(cerebro, boca, ouvir_comando):
     """Conversa em turnos após a wake word: continua ouvindo até uma frase
     de encerramento ("obrigado", "só isso"...) ou silêncio."""
@@ -119,9 +155,11 @@ def _conversar(cerebro, boca, ouvir_comando):
 
         primeiro = False
         print("BMO: [computando...]")
-        resposta = cerebro.responder(comando)
-        print(f"BMO: {resposta}")
-        boca = falar_com_seguranca(boca, resposta)
+        resposta = _responder_falando(cerebro, boca, comando)
+        if resposta is None:  # a voz falhou; segue só com texto
+            boca = None
+            resposta = cerebro.responder(comando)
+            print(f"BMO: {resposta}")
         print("BMO: [ouvindo — continue, ou silêncio/'só isso' encerra]\n")
 
 
@@ -163,16 +201,19 @@ def _loop_google(cerebro, ouvidos, boca, ack: str | None) -> None:
 
 
 def modo_voz(cerebro) -> None:
-    from bmo.ears import OuvidosPorcupine, OuvidosVosk, criar_ouvidos
+    from bmo.ears import OuvidosOpenWakeWord, OuvidosPorcupine, OuvidosVosk, criar_ouvidos
     from bmo.mouth import Boca
 
-    ouvidos = criar_ouvidos()  # Porcupine → Vosk → Google
-    escuta_local = isinstance(ouvidos, (OuvidosPorcupine, OuvidosVosk))
+    ouvidos = criar_ouvidos()  # Porcupine → OpenWakeWord → Vosk → Google
+    escuta_local = isinstance(ouvidos, (OuvidosPorcupine, OuvidosOpenWakeWord, OuvidosVosk))
     boca = None if os.getenv("BMO_MUDO") else Boca()
     print(f"[escuta: {type(ouvidos).__name__} | voz: {boca.voz if boca else 'desligada'}]")
 
-    # frase de confirmação pré-sintetizada: toca instantâneo a cada wake word
-    ack = boca.sintetizar("Oi! Pode falar!") if boca else None
+    # frase de confirmação pré-sintetizada e aparada: ela BLOQUEIA a abertura
+    # do microfone, então cada décimo de silêncio nela é espera do usuário
+    from bmo.app import TEXTO_ACK
+
+    ack = boca.sintetizar_curto(TEXTO_ACK) if boca else None
 
     try:
         if escuta_local:

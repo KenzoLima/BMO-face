@@ -73,3 +73,22 @@ def test_caderno_inexistente_nao_quebra(monkeypatch):
 def test_dispatch_via_registry(caderno_temporario):
     r = executar_ferramenta("anotar", {"conteudo": "teste via registry"})
     assert r["sucesso"] is True
+
+
+def test_busca_enxerga_nota_editada_por_fora(caderno_temporario):
+    """O cache de notas normalizadas e chaveado por (mtime, tamanho): editar
+    a nota no Obsidian tem que aparecer na busca seguinte."""
+    anotar("conteudo antigo sobre girassol", titulo="Jardim")
+    assert consultar_anotacoes("girassol")["total"] == 1
+
+    nota = next(caderno_temporario.glob("*.md"))
+    nota.write_text("# Jardim\n\nagora fala de bromelia\n", encoding="utf-8")
+
+    assert consultar_anotacoes("girassol")["total"] == 0
+    assert consultar_anotacoes("bromelia")["total"] == 1
+
+
+def test_acentos_e_maiusculas_casam_na_busca(caderno_temporario):
+    anotar("Comprar açúcar e pão no mercado", titulo="Mercado")
+    assert consultar_anotacoes("acucar")["total"] == 1
+    assert consultar_anotacoes("AÇÚCAR")["total"] == 1

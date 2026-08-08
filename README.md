@@ -1,4 +1,4 @@
-# BMO — Assistente Virtual Pessoal 🎮
+# BMO — Assistente Virtual Pessoal
 
 Assistente de voz para Windows inspirado no BMO de Hora de Aventura.
 Ele mora numa janelinha flutuante na sua área de trabalho, escuta a
@@ -13,7 +13,7 @@ Sem código, sem terminal. Leva uns 5 minutos.
 
 ### 1. Instale o BMO
 
-1. Pegue o arquivo **`BMO-Setup-1.0.0.exe`** (te mando por WhatsApp/Drive).
+1. Pegue o arquivo **`BMO-Setup-1.0.0.exe`**.
 2. Dê **dois cliques** nele.
 3. Se o Windows mostrar uma tela azul *"O Windows protegeu o seu PC"*, clique em
    **"Mais informações" → "Executar mesmo assim"** (isso aparece só porque o
@@ -34,8 +34,8 @@ Na primeira vez que o BMO abre, aparece a tela **"Oi! Vamos me configurar?"**.
 3. **Copie** a chave gerada (uma linha grande de letras e números).
 4. Volte ao BMO, **cole a chave** no campo *"Chave Gemini"* e clique em **Salvar**.
 
-> A chave é grátis e pessoal. Ela fica guardada só no seu PC (num arquivo `.env`
-> na pasta do BMO) — ninguém mais tem acesso.
+> A chave é grátis e pessoal. Ela fica guardada só no seu usuário do Windows
+> (`%APPDATA%\BMO\.env`) — o instalador não leva a chave de ninguém.
 
 ### 3. Fale com o BMO
 
@@ -78,8 +78,43 @@ Menu Iniciar → procure **BMO** → *Desinstalar*, ou pelo
   requisições de API.
 - **Modo conversa**: uma wake word, vários turnos; encerre com "obrigado",
   "só isso" ou silêncio.
+- **Fala enquanto pensa**: a resposta é falada frase a frase, conforme o
+  modelo escreve — em vez de esperar o texto inteiro e só então sintetizar
+  o áudio. Corta ~2,8s da espera até a primeira palavra.
+- **Vida própria**: quando ocioso, o BMO toma pequenas iniciativas — bom dia
+  com os lembretes do dia, sugestão de pausa e lembranças do caderno. Nunca
+  corta uma conversa, e é desligável na tela de configuração.
 - **Rosto animado**: janela 256x128 sempre no topo, arrastável, com estados
-  de standby, ouvindo, processando, falando, emoções e erro.
+  de standby, ouvindo, **pesquisando**, processando, falando, emoções e erro.
+  A tela de pesquisa mostra a lupa e a barra enchendo enquanto uma ferramenta
+  lenta trabalha, e fecha com a barra cheia quando termina.
+- **Medidor de requisições**: um velocímetro no canto do rosto que começa
+  cheio e vai esvaziando conforme o BMO gasta chamadas ao LLM. Conta chamadas
+  de API, não falas — o loop de ferramentas pode gastar várias por comando.
+- **Dispositivos de áudio**: escolha o microfone e a saída de som na tela de
+  configuração, com teste embutido para cada um.
+
+---
+
+## 🔒 Segurança
+
+O BMO executa ações reais no seu computador a partir de texto escolhido por um
+LLM — que, por sua vez, lê resultados de busca da internet. Todo argumento de
+ferramenta é tratado como **não confiável**:
+
+- **Comandos destrutivos são recusados** antes de chegar ao shell (apagar
+  recursivamente à força, desligar, formatar, `Invoke-Expression`, comandos
+  em Base64, matar processos, mexer no Defender, criar tarefas agendadas).
+- **Nada de texto interpolado em linha de comando**: o texto dos lembretes vai
+  em Base64 até o script do toast, e todo valor interpolado passa por um
+  literal PowerShell com aspas devidamente escapadas.
+- **Toda ferramenta tem teto de tempo** — uma busca pendurada não trava mais
+  o BMO. Ela desiste e avisa o modelo.
+- **A chave de API fica só no seu usuário** (`%APPDATA%\BMO\.env`), nunca é
+  impressa em log nem versionada.
+
+A lista de bloqueio do shell é uma barreira, não uma prova: se você não
+confia no ambiente, deixe o BMO sem a ferramenta de shell.
 
 ---
 
@@ -131,8 +166,13 @@ bmo/
 ├── app.py         orquestra: janela (thread principal) + voz (worker)
 ├── janela.py      janela flutuante topmost, arrastável
 ├── face.py        rosto OLED 128x64: estados e emoções
+├── medidor.py     velocímetro de requisições (desenho puro, 1-bit)
 ├── ears.py        escuta: wake word local (Vosk/Porcupine) + STT Google
-├── mouth.py       fala: edge-tts com voz do BMO ("Bímo") + lip sync
+├── mouth.py       fala: edge-tts, lip sync e streaming frase a frase
+├── audio.py       escolha do microfone e da saída de som
+├── consumo.py     contador de requisições ao LLM (fonte do medidor)
+├── proatividade.py "vida própria": briefing, pausas, lembranças
+├── paths.py       caminhos do .env e dos dados do usuário
 ├── config_ui.py   tela de configuração / boas-vindas (Tkinter)
 ├── brain/         cérebro: Gemini/Groq + loop de function calling
 └── hands/         ferramentas: apps, arquivos, shell, internet, lembretes, notas
@@ -144,4 +184,16 @@ instalador/        build.ps1, bmo.iss (Inno Setup), gerar_icone.py
 
 Veja [`.env.example`](.env.example) para todas as opções: provedor e modelos do
 cérebro, voz (velocidade/tom), motores de wake word (Porcupine/Vosk), timeout do
-modo conversa e a pasta do caderno (`BMO_VAULT`, para integrar ao Obsidian).
+modo conversa, a pasta do caderno (`BMO_VAULT`, para integrar ao Obsidian),
+proatividade, dispositivos de áudio e o medidor de requisições.
+
+Alguns que valem destaque:
+
+| Variável | Para quê |
+|---|---|
+| `BMO_LIMITE_REQUISICOES_DIA` | Escala do medidor — ajuste ao teto do seu plano |
+| `BMO_MEDIDOR` | `auto` (só com pouco saldo), `sempre` ou `nunca` |
+| `BMO_AUDIO_ENTRADA` / `BMO_AUDIO_SAIDA` | Microfone e saída (guardados por nome) |
+| `BMO_ACK` | O que ele fala ao ouvir "Bimo" (curto = responde antes) |
+| `BMO_PROATIVIDADE` | Liga/desliga a vida própria |
+| `BMO_STT_SEM_GOOGLE` | Transcrição 100% local (exige `faster-whisper`) |

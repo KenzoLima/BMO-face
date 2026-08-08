@@ -34,9 +34,20 @@ def test_data_no_passado_e_recusada():
     assert "passou" in resultado["erro"]
 
 
-def test_sanitizacao_remove_caracteres_perigosos():
-    limpo = _sanitizar_mensagem('tomar "remédio" `agora` por $10')
-    assert '"' not in limpo and "`" not in limpo and "$" not in limpo
+def test_mensagem_do_usuario_chega_intacta_no_lembrete():
+    """A defesa mudou de lugar, e isso melhora o lembrete.
+
+    Antes o sanitizador mutilava o texto (trocava aspas, crases e cifroes por
+    aspas simples) para tentar proteger o comando — e ainda assim abria uma
+    injecao, porque a aspa simples e exatamente o que fecha uma string do
+    PowerShell. Agora quem protege e o _ps_literal (e o Base64 no toast),
+    entao o recado do usuario pode ser guardado como ele falou."""
+    original = 'tomar "remédio" `agora` por $10'
+    assert _sanitizar_mensagem(original) == original
+
+
+def test_sanitizacao_remove_caracteres_de_controle():
+    assert _sanitizar_mensagem("tomar\x00 o\nremédio\x1f") == "tomar o remédio"
 
 
 def test_mensagem_longa_e_cortada():

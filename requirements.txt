@@ -9,11 +9,13 @@ PyAudio>=0.2.14
 pvporcupine>=3.0        # wake word 100% local (zero requisicoes em espera)
 pvrecorder>=1.2         # captura de audio para o Porcupine
 vosk>=0.3.45            # wake word local SEM conta (modelo em modelos/vosk-model-small-pt-*)
-# faster-whisper>=1.1   # Fase 2: transcricao 100% local (descomente quando migrar)
+faster-whisper>=1.1     # transcricao do comando 100% local (BMO_STT_SEM_GOOGLE=1 dispensa a nuvem)
 
 # Modulo 3 - Cerebro (LLM + Function Calling nativo)
 google-genai>=1.0
-openai>=1.60            # cliente p/ Groq e qualquer API compativel com OpenAI
+openai>=1.60            # cliente p/ Groq, Ollama (cerebro local) e qualquer API OpenAI-compativel
+# Cerebro local (opcional): instale o Ollama (ollama.com) e rode `ollama pull qwen3:4b`.
+# Nao e um pacote pip - e um app a parte que serve um modelo local em localhost:11434.
 
 # Modulo 2 - Maos (ferramentas do OS)
 ddgs>=9.0               # busca na internet sem chave de API (DuckDuckGo)
@@ -23,6 +25,7 @@ edge-tts>=7.0
 
 # Rosto (pygame - usado pelo bmo_face.py)
 pygame>=2.6
+numpy>=1.24            # envelope do lip sync + conversao vetorizada do rosto na janela
 
 # Desenvolvimento / Testes
 pytest>=8.0

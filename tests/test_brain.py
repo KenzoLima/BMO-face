@@ -92,3 +92,53 @@ def test_esquecer_limpa_a_memoria():
     cerebro.responder("oi")
     cerebro.esquecer()
     assert cerebro.historico == []
+
+
+# --- reserva preguicosa ---
+
+
+def test_reserva_so_nasce_quando_o_primario_falha(monkeypatch):
+    """Construir a reserva importa outro SDK: nao pode acontecer no boot."""
+    criadas = []
+
+    def criar_reserva_espia(nome_primario):
+        criadas.append(nome_primario)
+        return ProvedorFake("reserva", resposta="[focado] Reserva!")
+
+    monkeypatch.setattr("bmo.brain.agent._criar_reserva", criar_reserva_espia)
+
+    cerebro = Cerebro(provedor=ProvedorFake("primario"))
+    assert criadas == []  # boot nao pagou nada
+
+    assert cerebro.responder("oi") == "[feliz] Oi! Bip!"
+    assert criadas == []  # primario respondeu: reserva segue sem existir
+
+    cerebro.provedor.falha = True
+    assert cerebro.responder("oi") == "[focado] Reserva!"
+    assert criadas == ["primario"]  # so agora foi construida
+
+    cerebro.responder("de novo")
+    assert criadas == ["primario"]  # e construida uma vez so
+
+
+def test_nome_da_reserva_nao_constroi_o_provedor(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "chave-fake")
+    monkeypatch.setattr(
+        "bmo.brain.agent._criar_reserva",
+        lambda nome: pytest.fail("nome_reserva nao pode construir a reserva"),
+    )
+
+    cerebro = Cerebro(provedor=ProvedorFake("groq"))
+    assert cerebro.nome_reserva == "gemini"
+
+
+def test_reserva_explicita_continua_valendo():
+    reserva = ProvedorFake("reserva-injetada")
+    cerebro = Cerebro(provedor=ProvedorFake("primario", falha=True), reserva=reserva)
+    assert cerebro.nome_reserva == "reserva-injetada"
+    cerebro.responder("oi")
+    assert reserva.chamadas == 1
+
+    cerebro.reserva = None  # desligar a reserva tambem continua funcionando
+    assert cerebro.reserva is None and cerebro.nome_reserva is None

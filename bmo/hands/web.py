@@ -12,11 +12,16 @@ from .registry import ferramenta
 MAX_RESULTADOS_TETO = 8
 LIMITE_RESUMO = 300  # caracteres por resumo
 
+# Teto de espera da busca. Sem ele o DuckDuckGo podia pendurar a thread de voz
+# indefinidamente (rate limit, rede ruim) e o BMO ficava mudo para sempre,
+# sem erro nenhum na tela. Melhor admitir que não achou do que travar.
+TIMEOUT_BUSCA = 12.0
+
 
 def _executar_busca(consulta: str, max_resultados: int) -> list[dict]:
     from ddgs import DDGS  # lazy: só carrega quando a busca é usada
 
-    with DDGS() as cliente:
+    with DDGS(timeout=TIMEOUT_BUSCA) as cliente:
         return list(cliente.text(consulta, region="br-pt", max_results=max_resultados))
 
 

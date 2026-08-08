@@ -84,15 +84,25 @@ class EstadoBMO:
 # ─── FrameBuffer 1-bit (espelha a RAM de um OLED SSD1306) ───────────────────
 
 
+_BYTES_FRAME = OLED_W * OLED_H // 8
+_FRAME_VAZIO = bytes(_BYTES_FRAME)  # zeros prontos: clear() vira uma cópia só
+
+# Trigonometria por grau inteiro, pré-calculada para o arc() (ver FrameBuffer).
+# A faixa cobre com folga o que o rosto usa (de -50° a 360°).
+_GRAUS_BASE = 360
+_GRAUS_LIMITE = 721
+_GRAUS_COS = tuple(math.cos(math.radians(a)) for a in range(-_GRAUS_BASE, _GRAUS_LIMITE))
+_GRAUS_SIN = tuple(math.sin(math.radians(a)) for a in range(-_GRAUS_BASE, _GRAUS_LIMITE))
+
+
 class FrameBuffer:
     __slots__ = ("buf",)
 
     def __init__(self):
-        self.buf = bytearray(OLED_W * OLED_H // 8)
+        self.buf = bytearray(_BYTES_FRAME)
 
     def clear(self):
-        for i in range(len(self.buf)):
-            self.buf[i] = 0
+        self.buf[:] = _FRAME_VAZIO
 
     def pixel(self, x, y, on=True):
         if 0 <= x < OLED_W and 0 <= y < OLED_H:
@@ -176,6 +186,22 @@ class FrameBuffer:
                 self.pixel(x + w - r - 1 + dx, y + h - r - 1 + dy, on)
 
     def arc(self, cx, cy, r, start_deg, end_deg, on=True, thickness=2):
+        """Arco desenhado de grau em grau.
+
+        É o primitivo mais usado do rosto (todos os olhos e bocas curvos), por
+        isso o seno/cosseno de cada grau inteiro sai de tabela. Ângulos
+        quebrados ou fora da faixa tabelada caem no cálculo direto.
+        """
+        inicio, fim = int(start_deg), int(end_deg)
+        if inicio == start_deg and -_GRAUS_BASE <= inicio and fim < _GRAUS_LIMITE:
+            pixel = self.pixel
+            for a in range(inicio, fim + 1):
+                cos_a, sen_a = _GRAUS_COS[a + _GRAUS_BASE], _GRAUS_SIN[a + _GRAUS_BASE]
+                for t in range(thickness):
+                    raio = r - t
+                    pixel(round(cx + raio * cos_a), round(cy + raio * sen_a), on)
+            return
+
         a = start_deg
         while a <= end_deg:
             rad = math.radians(a)
@@ -360,6 +386,42 @@ class RostoBMO:
                 self.fb.pixel(nx + 1, ny + 4)
                 self.fb.hline(nx, ny + 5, 5)
 
+    def draw_pesquisando(self, frame, progresso: float | None = None):
+        """Pesquisando na internet: lupa varrendo + barra de carregamento.
+
+        Existe porque uma ferramenta lenta (busca na web, lembretes) deixava
+        o rosto parado, e o usuário não tinha como saber se o BMO estava
+        trabalhando ou travado. ``progresso=None`` sobe sozinho e para em 95%
+        (não sabemos quanto falta); ``1.0`` é a tela concluída.
+        """
+        self.fb.clear()
+        olhos_y = self.EL[1] - 6
+        # olhos acompanham a lupa, de um lado para o outro
+        desvio = round(math.sin(frame * 0.08) * 4)
+        self._eye_normal(self.EL[0] + desvio, olhos_y)
+        self._eye_normal(self.ER[0] + desvio, olhos_y)
+
+        # lupa deslizando sobre a barra
+        if progresso is None:
+            progresso = min(frame / 150.0, 0.95)
+        cheio = max(4, round(90 * progresso))
+        self.fb.rounded_rect(18, 42, 92, 10, 4, fill=False)
+        self.fb.rounded_rect(19, 43, cheio, 8, 3)
+
+        lupa_x = 19 + min(cheio, 86)
+        self.fb.circle(lupa_x, 34, 5, on=True)
+        self.fb.circle(lupa_x, 34, 3, on=False)   # lente vazada
+        self.fb.line(lupa_x + 3, 37, lupa_x + 6, 40, thickness=2)
+
+        if progresso >= 1.0:  # concluída: confirma antes de sair da tela
+            self.fb.rect(60, 6, 3, 3)
+            self.fb.rect(63, 9, 3, 3)
+            self.fb.rect(66, 6, 3, 3)
+            self.fb.rect(69, 3, 3, 3)
+        elif (frame // 10) % 4 < 3:  # reticências pulsando
+            for i in range((frame // 10) % 4):
+                self.fb.circle(56 + i * 8, 20, 2)
+
     def draw_error(self, frame):
         """Erro: olhos em X e boca reta — pisca devagar para chamar atenção."""
         self.fb.clear()
@@ -383,16 +445,21 @@ class RostoBMO:
 
     def draw_apresentacao(self, frame, progresso: float):
         """Tela 1 → Tela 2 do esboço: as letras e a barra se dissolvem,
-        pixel a pixel, no rosto do BMO."""
-        origem = FrameBuffer()
-        RostoBMO(origem).draw_boot(120)  # boot com a barra cheia
+        pixel a pixel, no rosto do BMO.
+
+        A origem (boot com a barra cheia) e o ruído por pixel são constantes:
+        ficam em cache de módulo em vez de serem refeitos a cada frame — este
+        era, de longe, o frame mais caro do BMO.
+        """
+        origem = _origem_apresentacao()
         destino = FrameBuffer()
         RostoBMO(destino).draw_idle(frame)
 
         self.fb.clear()
         for y in range(OLED_H):
+            limiares = _LIMIARES_DISSOLUCAO[y]
             for x in range(OLED_W):
-                fonte = destino if _limiar_dissolucao(x, y) < progresso else origem
+                fonte = destino if limiares[x] < progresso else origem
                 if fonte.get(x, y):
                     self.fb.pixel(x, y)
 
@@ -425,6 +492,23 @@ def _texto_pixel(fb: FrameBuffer, texto: str, x: int, y: int) -> None:
 def _limiar_dissolucao(x: int, y: int) -> float:
     """Ruído determinístico por pixel (0..1) — dita a ordem da dissolução."""
     return ((x * 73_856_093) ^ (y * 19_349_663)) % 997 / 997.0
+
+
+# Tabela do ruído (constante) — evita recalcular 8192 limiares por frame.
+_LIMIARES_DISSOLUCAO = tuple(
+    tuple(_limiar_dissolucao(x, y) for x in range(OLED_W)) for y in range(OLED_H)
+)
+
+_origem_cache: "FrameBuffer | None" = None
+
+
+def _origem_apresentacao() -> "FrameBuffer":
+    """Frame de onde a dissolução parte: o boot com a barra cheia (constante)."""
+    global _origem_cache
+    if _origem_cache is None:
+        _origem_cache = FrameBuffer()
+        RostoBMO(_origem_cache).draw_boot(120)
+    return _origem_cache
 
 
 def _draw_bmo_logo(fb: FrameBuffer, x: int, y: int) -> None:
@@ -468,6 +552,14 @@ def desenhar_estado(rosto: RostoBMO, estado: EstadoBMO, frame: int) -> str:
     if modo == "falando":
         rosto.draw_speaking(frame, amplitude=estado.amplitude_boca())
         return "draw_speaking"
+
+    if modo == "pesquisando":
+        rosto.draw_pesquisando(frame)
+        return "draw_pesquisando"
+
+    if modo == "pesquisa_concluida":
+        rosto.draw_pesquisando(frame, progresso=1.0)
+        return "draw_pesquisando"
 
     if modo == "boot":
         nome = "draw_boot"

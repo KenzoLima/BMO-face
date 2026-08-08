@@ -17,6 +17,7 @@ import re
 import unicodedata
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from .registry import ferramenta
 
@@ -58,10 +59,20 @@ def _slug(texto: str, max_len: int = 40) -> str:
     return texto[:max_len].rstrip("-") or "nota"
 
 
+# Marcas de acento que o NFKD separa das letras (é → e + U+0301).
+_RE_ACENTOS = re.compile(r"[̀-ͯ]")
+
+
 def _normalizar(texto: str) -> str:
-    """minúsculas + sem acentos — buscas encontram 'aniversário' ~ 'aniversario'."""
-    texto = unicodedata.normalize("NFKD", texto)
-    return "".join(c for c in texto if not unicodedata.combining(c)).lower()
+    """minúsculas + sem acentos — buscas encontram 'aniversário' ~ 'aniversario'.
+
+    Roda sobre o caderno inteiro a cada busca, então o caminho importa: o
+    ``isascii()`` resolve de graça o texto sem acento nenhum, e o regex faz o
+    resto em C — bem mais rápido que filtrar caractere a caractere em Python.
+    """
+    if texto.isascii():  # caso comum e barato: não há o que decompor
+        return texto.lower()
+    return _RE_ACENTOS.sub("", unicodedata.normalize("NFKD", texto)).lower()
 
 
 def _palavras_chave(texto: str) -> list[str]:
@@ -69,22 +80,60 @@ def _palavras_chave(texto: str) -> list[str]:
     return [p for p in palavras if len(p) >= 3 and p not in _STOPWORDS]
 
 
+class Nota(NamedTuple):
+    """Uma nota do caderno já lida e preparada para busca."""
+
+    caminho: Path
+    mtime: float
+    conteudo: str           # texto original, como será mostrado ao usuário
+    normalizado: str        # conteúdo sem acentos e em minúsculas (para casar)
+    nome_normalizado: str   # idem para o nome do arquivo
+
+
+# Cache das notas já lidas e normalizadas, por caminho.
+# Sem ele, cada turno de conversa relia e renormalizava o caderno inteiro —
+# num vault Obsidian de verdade isso vira mais de um segundo de latência ANTES
+# da requisição ao LLM. A chave (mtime, tamanho) se invalida sozinha quando a
+# nota muda no disco, então editar no Obsidian aparece na busca seguinte.
+_CACHE_NOTAS: dict[Path, tuple[tuple[float, int], Nota]] = {}
+MAX_NOTAS_EM_CACHE = 5_000
+
+
 def _iterar_notas(caderno: Path):
+    """Percorre o caderno devolvendo ``Nota``s (do cache quando não mudaram)."""
     if not caderno.is_dir():
         return
+    if len(_CACHE_NOTAS) > MAX_NOTAS_EM_CACHE:
+        _CACHE_NOTAS.clear()  # limite simples: vault gigante não vira vazamento
     for arquivo in caderno.rglob("*.md"):
         if ".obsidian" in arquivo.parts or ".trash" in arquivo.parts:
             continue
         try:
-            if arquivo.stat().st_size > MAX_TAMANHO_ARQUIVO:
+            info = arquivo.stat()
+            if info.st_size > MAX_TAMANHO_ARQUIVO:
                 continue
-            yield arquivo, arquivo.read_text(encoding="utf-8", errors="replace")
+            versao = (info.st_mtime, info.st_size)
+            em_cache = _CACHE_NOTAS.get(arquivo)
+            if em_cache is not None and em_cache[0] == versao:
+                yield em_cache[1]
+                continue
+            conteudo = arquivo.read_text(encoding="utf-8", errors="replace")
+            nota = Nota(
+                arquivo,
+                info.st_mtime,
+                conteudo,
+                _normalizar(conteudo),
+                _normalizar(arquivo.stem),
+            )
+            _CACHE_NOTAS[arquivo] = (versao, nota)
+            yield nota
         except OSError:
             continue
 
 
-def _trecho(conteudo: str, palavra: str) -> str:
-    pos = _normalizar(conteudo).find(palavra)
+def _trecho(conteudo: str, normalizado: str, palavra: str) -> str:
+    """Recorte do conteúdo em volta de ``palavra`` (procurada no normalizado)."""
+    pos = normalizado.find(palavra)
     if pos < 0:
         pos = 0
     inicio = max(0, pos - TAMANHO_TRECHO // 3)
@@ -96,24 +145,26 @@ def _buscar(termo: str, max_resultados: int) -> list[dict]:
     """Busca local por palavras-chave; título vale mais que corpo."""
     palavras = _palavras_chave(termo) or [_normalizar(termo).strip()]
     resultados = []
-    for arquivo, conteudo in _iterar_notas(_dir_caderno()):
-        texto = _normalizar(conteudo)
-        nome = _normalizar(arquivo.stem)
+    for nota in _iterar_notas(_dir_caderno()):
         pontos = 0.0
         primeira_palavra = None
         for p in palavras:
-            no_corpo = texto.count(p)
-            no_titulo = nome.count(p)
+            no_corpo = nota.normalizado.count(p)
+            no_titulo = nota.nome_normalizado.count(p)
             if (no_corpo or no_titulo) and primeira_palavra is None:
                 primeira_palavra = p
             pontos += min(no_corpo, 3) + no_titulo * 5
         if pontos > 0:
             resultados.append(
                 {
-                    "nota": arquivo.stem,
-                    "caminho": str(arquivo),
+                    "nota": nota.caminho.stem,
+                    "caminho": str(nota.caminho),
                     "pontuacao": pontos,
-                    "trecho": _trecho(conteudo, primeira_palavra or palavras[0]),
+                    "trecho": _trecho(
+                        nota.conteudo,
+                        nota.normalizado,
+                        primeira_palavra or palavras[0],
+                    ),
                 }
             )
     resultados.sort(key=lambda r: r["pontuacao"], reverse=True)
@@ -203,6 +254,32 @@ def consultar_anotacoes(termo: str) -> dict:
 
 
 # ─── Recordação automática (zero requisições extras) ─────────────────────────
+
+
+def nota_espontanea(excluir: str | None = None) -> dict | None:
+    """Uma nota recente do caderno para o BMO recordar sozinho (proatividade).
+
+    Escolhe a anotação modificada mais recentemente (fora ``excluir``, para
+    não repetir a última recordada) e devolve ``{"nota", "trecho"}`` ou None.
+    Busca 100% local; nunca levanta exceção para não atrapalhar o laço."""
+    try:
+        candidatos = [
+            nota for nota in _iterar_notas(_dir_caderno())
+            if nota.caminho.stem != excluir and nota.conteudo.strip()
+        ]
+        if not candidatos:
+            return None
+        nota = max(candidatos, key=lambda n: n.mtime)
+        return {
+            "nota": nota.caminho.stem,
+            "trecho": _trecho(
+                nota.conteudo.strip(),
+                nota.normalizado.strip(),
+                nota.nome_normalizado.split(" ")[0],
+            ),
+        }
+    except Exception:
+        return None
 
 
 def memorias_relevantes(texto: str) -> str:

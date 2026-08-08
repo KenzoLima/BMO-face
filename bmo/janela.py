@@ -11,6 +11,7 @@ Controles:
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 from ctypes import wintypes
 
@@ -19,6 +20,12 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame
 
 from .face import OLED_H, OLED_W, FrameBuffer
+
+try:  # numpy vetoriza a conversão framebuffer → surface (13x mais rápido)
+    import numpy as np
+    import pygame.surfarray  # noqa: F401 - registra o backend de arrays
+except ImportError:  # sem numpy o rosto ainda desenha, só que pixel a pixel
+    np = None
 
 _user32 = ctypes.windll.user32
 
@@ -47,10 +54,47 @@ SWP_NOMOVE = 0x0002
 SWP_NOACTIVATE = 0x0010
 MARGEM_CANTO = 24
 
+# Deslocamentos dos "dentes" da engrenagem — fixos, calculados uma vez só
+# (antes saíam de seno/cosseno recalculados a cada frame com o mouse na janela)
+_DENTES_ENGRENAGEM = tuple(
+    (round(8 * math.cos(math.radians(a))), round(8 * math.sin(math.radians(a))))
+    for a in range(0, 360, 60)
+)
+
+
+_PALETA = np.array([COR_CORPO, COR_PIXEL], dtype=np.uint8) if np is not None else None
+
+
+def _pintar(surface: "pygame.Surface", fb: FrameBuffer) -> None:
+    """Framebuffer 1-bit → surface 128x64 colorida.
+
+    Com numpy a conversão é uma operação de array só; sem ele, cai no laço
+    pixel a pixel (mesmo resultado, ~13x mais lento). Como isto roda a cada
+    frame, a diferença aparece direto no uso de CPU do BMO parado na tela.
+    """
+    if np is None:
+        surface.fill(COR_CORPO)
+        for y in range(OLED_H):
+            for x in range(OLED_W):
+                if fb.get(x, y):
+                    surface.set_at((x, y), COR_PIXEL)
+        return
+
+    # Layout do SSD1306: buf[(y >> 3) * OLED_W + x], com o bit (y & 7).
+    # unpackbits desdobra cada byte-página nas 8 linhas que ele guarda.
+    paginas = np.frombuffer(fb.buf, dtype=np.uint8).reshape(OLED_H // 8, OLED_W)
+    bits = np.unpackbits(paginas[:, :, None], axis=2, bitorder="little")
+    mascara = bits.transpose(0, 2, 1).reshape(OLED_H, OLED_W)  # (página, bit, x) → (y, x)
+    pygame.surfarray.blit_array(surface, _PALETA[mascara].transpose(1, 0, 2))
+
 
 def _icone_janela() -> "pygame.Surface":
-    """Ícone da barra de tarefas: corpo quadrado com o rosto clássico."""
-    from .face import OLED_H, OLED_W, FrameBuffer, RostoBMO
+    """Ícone da barra de tarefas: corpo quadrado com o rosto clássico.
+
+    Segue pixel a pixel de propósito: precisa do fundo TRANSPARENTE (SRCALPHA)
+    para o smoothscale suavizar só o rosto, e roda uma única vez no boot.
+    """
+    from .face import RostoBMO
 
     fb = FrameBuffer()
     RostoBMO(fb).draw_idle(16)  # frame sem piscada e sem cursor
@@ -169,11 +213,7 @@ class JanelaBMO:
 
     # ── renderização ─────────────────────────────────────────────────────
     def render(self, fb: FrameBuffer) -> None:
-        self.surface.fill(COR_CORPO)
-        for y in range(OLED_H):
-            for x in range(OLED_W):
-                if fb.get(x, y):
-                    self.surface.set_at((x, y), COR_PIXEL)
+        _pintar(self.surface, fb)
 
         pygame.transform.scale(
             self.surface, (self.largura, self.altura), self.tela
@@ -195,12 +235,8 @@ class JanelaBMO:
             # engrenagem: círculo com "dentes" (Tela 3 do esboço)
             cx, cy = self._area_config.center
             pygame.draw.circle(self.tela, COR_BORDA, (cx, cy), 7)
-            for ang in range(0, 360, 60):
-                import math as _m
-
-                px = cx + round(8 * _m.cos(_m.radians(ang)))
-                py = cy + round(8 * _m.sin(_m.radians(ang)))
-                pygame.draw.circle(self.tela, COR_BORDA, (px, py), 2)
+            for dx, dy in _DENTES_ENGRENAGEM:
+                pygame.draw.circle(self.tela, COR_BORDA, (cx + dx, cy + dy), 2)
             pygame.draw.circle(self.tela, COR_CORPO, (cx, cy), 3)
 
         pygame.display.flip()

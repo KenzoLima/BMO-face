@@ -1,16 +1,21 @@
 """Percepção (STT) — os ouvidos do BMO.
 
-Três motores de escuta passiva (wake word), escolhidos por ``criar_ouvidos()``
+Quatro motores de escuta passiva (wake word), escolhidos por ``criar_ouvidos()``
 nesta ordem de preferência:
 
 1. **OuvidosPorcupine**: detecção 100% local via Picovoice — zero requisições.
    Requer PICOVOICE_ACCESS_KEY no .env e um modelo .ppn em ``modelos/``.
-2. **OuvidosVosk**: STT offline leve — zero requisições, SEM conta nem chave.
+2. **OuvidosOpenWakeWord**: wake word local via openWakeWord — sem conta, sem chave.
+   Requer o modelo ``modelos/bimo.onnx`` (gerado com ``python treinar_bimo.py``).
+3. **OuvidosVosk**: STT offline leve — zero requisições, SEM conta nem chave.
    Requer só o modelo pt-BR em ``modelos/vosk-model-small-pt-*``.
-3. **Ouvidos** (último recurso): o esquema original — janelas curtas
-   transcritas na API gratuita do Google; cada janela com som gasta requisição.
+4. **Ouvidos** (último recurso): janelas curtas transcritas na API gratuita do
+   Google; cada janela com som gasta requisição.
 
-A escuta **ativa** (o comando após o gatilho) usa o Google nos três casos.
+A escuta **ativa** (o comando após o gatilho) usa **faster-whisper** quando
+disponível (local, offline, qualidade superior ao Google gratuito), caindo
+para o Google como reserva automática.
+
 O módulo não imprime nada: devolve valores e quem chama decide o feedback.
 """
 
@@ -18,9 +23,12 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 
 import speech_recognition as sr
+
+from .audio import indice_entrada, indice_entrada_porcupine
 
 DIR_MODELOS = Path(__file__).resolve().parent.parent / "modelos"
 
@@ -39,9 +47,16 @@ WAKE_WORDS_VOSK = ("bio", "bico", "mimo", "bi")
 # não passa pelo teto de confiança (que existe para palavras reais).
 ANCORAS_SEM_TETO = ("bi",)
 
-
-
 TAMANHO_MINIMO_FALA = 3  # transcrições menores que isso são ruído
+
+
+def _sem_google() -> bool:
+    """Modo offline: BMO_STT_SEM_GOOGLE=1 desliga a reserva na nuvem (Google).
+
+    Com isso, a transcrição do comando fica 100% local (faster-whisper) e o
+    BMO nunca gasta requisição de STT. Exige um motor de wake word local
+    (Porcupine/OpenWakeWord/Vosk) e o faster-whisper instalado."""
+    return os.getenv("BMO_STT_SEM_GOOGLE", "").strip() not in ("", "0")
 
 
 def contem_wake_word(texto: str, wake_words=WAKE_WORDS_PADRAO) -> bool:
@@ -49,6 +64,74 @@ def contem_wake_word(texto: str, wake_words=WAKE_WORDS_PADRAO) -> bool:
     texto = texto.lower()
     return any(wake in texto for wake in wake_words)
 
+
+# ── Transcritor Whisper compartilhado ──────────────────────────────────────
+
+class TranscritorWhisper:
+    """Transcritor local via faster-whisper — sem rede, sem chave.
+
+    Singleton com carregamento tardio: o modelo só é baixado/carregado na
+    primeira chamada a ``transcrever()``. Use ``BMO_WHISPER_MODELO`` no .env
+    para escolher o tamanho (tiny/base/small/medium; padrão: small).
+    """
+
+    _instancia: "TranscritorWhisper | None" = None
+    _indisponivel = False  # True quando faster-whisper não está instalado
+
+    @classmethod
+    def obter(cls) -> "TranscritorWhisper | None":
+        if cls._indisponivel:
+            return None
+        if cls._instancia is None:
+            try:
+                import faster_whisper  # noqa — verifica disponibilidade
+                cls._instancia = cls()
+            except ImportError:
+                cls._indisponivel = True
+                return None
+        return cls._instancia
+
+    @classmethod
+    def precarregar(cls) -> None:
+        """Inicia download/carregamento do modelo em thread de fundo.
+
+        Chame logo após criar os ouvidos para que o modelo esteja pronto
+        antes do primeiro comando, sem bloquear o boot.
+        """
+        t = threading.Thread(target=cls.obter, name="whisper-preload", daemon=True)
+        t.start()
+
+    def __init__(self) -> None:
+        self._nome = os.getenv("BMO_WHISPER_MODELO", "small")
+        self._modelo = None
+        self._lock = threading.Lock()
+
+    def _carregar(self):
+        with self._lock:
+            if self._modelo is None:
+                from faster_whisper import WhisperModel
+                self._modelo = WhisperModel(self._nome, compute_type="int8")
+        return self._modelo
+
+    def transcrever(self, audio: sr.AudioData) -> str | None:
+        """Converte AudioData → float32 numpy → texto via Whisper."""
+        import io
+        import wave
+
+        import numpy as np
+
+        modelo = self._carregar()
+        wav = audio.get_wav_data(convert_rate=16000, convert_width=2)
+        with io.BytesIO(wav) as buf:
+            with wave.open(buf) as wf:
+                frames = wf.readframes(wf.getnframes())
+        amostras = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        segmentos, _ = modelo.transcribe(amostras, language="pt", beam_size=5)
+        texto = " ".join(seg.text for seg in segmentos).strip()
+        return texto if len(texto) >= TAMANHO_MINIMO_FALA else None
+
+
+# ── Motores de escuta ───────────────────────────────────────────────────────
 
 class Ouvidos:
     """Captura de voz do microfone com wake word e escuta de comando."""
@@ -61,18 +144,24 @@ class Ouvidos:
         self.reconhecedor.dynamic_energy_threshold = True
 
     def abrir_microfone(self) -> sr.Microphone:
-        """Cria a fonte de áudio; use como context manager em volta do loop."""
-        return sr.Microphone()
+        """Cria a fonte de áudio; use como context manager em volta do loop.
+
+        Respeita o microfone escolhido na tela de configurações; sem escolha
+        (ou com o dispositivo desconectado), usa o padrão do Windows.
+        """
+        return sr.Microphone(device_index=indice_entrada())
 
     def calibrar(self, fonte, duracao: float = 1.5) -> float:
         """Ajusta o limiar de energia ao ruído ambiente; retorna o valor final."""
         self.reconhecedor.adjust_for_ambient_noise(fonte, duration=duracao)
         return self.reconhecedor.energy_threshold
 
-    def _transcrever(self, audio) -> str | None:
+    def _transcrever_google(self, audio) -> str | None:
+        if _sem_google():
+            return None  # modo offline: sem reserva na nuvem
         try:
             return self.reconhecedor.recognize_google(audio, language=self.idioma)
-        except sr.UnknownValueError:  # fala ininteligível / ruído
+        except sr.UnknownValueError:
             return None
 
     def esperar_wake_word(self, fonte) -> str | None:
@@ -86,29 +175,38 @@ class Ouvidos:
         except sr.WaitTimeoutError:
             return None
 
-        texto = self._transcrever(audio)
+        texto = self._transcrever_google(audio)
         if texto and contem_wake_word(texto, self.wake_words):
             return texto
         return None
 
     def ouvir_comando(self, fonte, timeout: float = 10) -> str | None:
-        """Escuta ativa: captura o comando completo após a wake word.
+        """Escuta ativa: usa faster-whisper quando disponível, Google como reserva.
 
-        ``timeout`` menor é usado no modo conversa (respostas encadeadas).
+        Todas as subclasses que delegam para ``_google.ouvir_comando()``
+        herdam automaticamente a melhoria sem nenhuma alteração.
         """
         try:
             audio = self.reconhecedor.listen(fonte, timeout=timeout, phrase_time_limit=15)
         except sr.WaitTimeoutError:
             return None
 
-        texto = self._transcrever(audio)
+        whisper = TranscritorWhisper.obter()
+        if whisper is not None:
+            try:
+                texto = whisper.transcrever(audio)
+            except Exception:
+                texto = self._transcrever_google(audio)
+        else:
+            texto = self._transcrever_google(audio)
+
         if texto is None or len(texto.strip()) < TAMANHO_MINIMO_FALA:
             return None
         return texto.strip()
 
 
 class OuvidosPorcupine:
-    """Wake word local (Porcupine) + comando via Google.
+    """Wake word local (Porcupine) + comando via Whisper/Google.
 
     A fase passiva processa o áudio em CPU, offline, sem custo por requisição.
     Detectou o gatilho → abre o microfone do SpeechRecognition só para o comando.
@@ -156,7 +254,10 @@ class OuvidosPorcupine:
         """Bloqueia até ouvir a wake word. Local, sem rede, ~1% de CPU."""
         from pvrecorder import PvRecorder
 
-        gravador = PvRecorder(frame_length=self.porcupine.frame_length)
+        gravador = PvRecorder(
+            frame_length=self.porcupine.frame_length,
+            device_index=indice_entrada_porcupine(),  # -1 = padrão do sistema
+        )
         gravador.start()
         try:
             while True:
@@ -168,13 +269,79 @@ class OuvidosPorcupine:
             gravador.delete()
 
     def ouvir_comando(self, timeout: float = 10) -> str | None:
-        """Escuta ativa via Google (1 requisição por comando)."""
-        with sr.Microphone() as fonte:
+        """Escuta ativa: Whisper quando disponível, Google como reserva."""
+        with sr.Microphone(device_index=indice_entrada()) as fonte:
             self._google.calibrar(fonte, duracao=0.5)
             return self._google.ouvir_comando(fonte, timeout=timeout)
 
     def encerrar(self) -> None:
         self.porcupine.delete()
+
+
+class OuvidosOpenWakeWord:
+    """Wake word local via openWakeWord — sem conta, sem chave, sem rede após setup.
+
+    Detecta "bimo" usando um modelo ONNX leve (~500 KB) que roda em CPU.
+    Requer o arquivo ``modelos/bimo.onnx`` — gere-o com::
+
+        python treinar_bimo.py
+
+    O limiar de ativação é ajustável via ``BMO_OWW_LIMIAR`` no .env (padrão: 0.5).
+    Valores menores aumentam a sensibilidade; maiores reduzem falsos positivos.
+    """
+
+    MODELO_PATH = DIR_MODELOS / "bimo.onnx"
+    TAMANHO_CHUNK = 1280   # 80 ms a 16 kHz — janela padrão do openWakeWord
+    TAXA_AMOSTRAGEM = 16000
+
+    def __init__(self, limiar: float | None = None, idioma: str = "pt-BR"):
+        if not self.MODELO_PATH.is_file():
+            raise ValueError(
+                f"Modelo openWakeWord não encontrado em '{self.MODELO_PATH}'. "
+                "Execute 'python treinar_bimo.py' para gerá-lo automaticamente."
+            )
+        self._limiar = float(os.getenv("BMO_OWW_LIMIAR", str(limiar or 0.5)))
+        self._google = Ouvidos(idioma=idioma)
+        self._oww = self._carregar_modelo()
+
+    def _carregar_modelo(self):
+        from openwakeword.model import Model
+        return Model(wakeword_models=[str(self.MODELO_PATH)], inference_framework="onnx")
+
+    def esperar_wake_word(self) -> str:
+        """Bloqueia até ouvir a wake word. 100% local, ~2% CPU."""
+        import pyaudio
+        import numpy as np
+
+        audio = pyaudio.PyAudio()
+        fluxo = audio.open(
+            rate=self.TAXA_AMOSTRAGEM,
+            channels=1,
+            format=pyaudio.paInt16,
+            input=True,
+            input_device_index=indice_entrada(),
+            frames_per_buffer=self.TAMANHO_CHUNK,
+        )
+        try:
+            while True:
+                dados = fluxo.read(self.TAMANHO_CHUNK, exception_on_overflow=False)
+                chunk = np.frombuffer(dados, dtype=np.int16)
+                predicoes = self._oww.predict(chunk)
+                if any(v >= self._limiar for v in predicoes.values()):
+                    return "wake word local"
+        finally:
+            fluxo.stop_stream()
+            fluxo.close()
+            audio.terminate()
+
+    def ouvir_comando(self, timeout: float = 10) -> str | None:
+        """Escuta ativa: Whisper quando disponível, Google como reserva."""
+        with sr.Microphone(device_index=indice_entrada()) as fonte:
+            self._google.calibrar(fonte, duracao=0.5)
+            return self._google.ouvir_comando(fonte, timeout=timeout)
+
+    def encerrar(self) -> None:
+        pass
 
 
 class OuvidosVosk:
@@ -276,6 +443,7 @@ class OuvidosVosk:
             channels=1,
             format=pyaudio.paInt16,
             input=True,
+            input_device_index=indice_entrada(),
             frames_per_buffer=self.TAMANHO_BLOCO,
         )
         try:
@@ -291,8 +459,8 @@ class OuvidosVosk:
             audio.terminate()
 
     def ouvir_comando(self, timeout: float = 10) -> str | None:
-        """Escuta ativa via Google (1 requisição por comando)."""
-        with sr.Microphone() as fonte:
+        """Escuta ativa: Whisper quando disponível, Google como reserva."""
+        with sr.Microphone(device_index=indice_entrada()) as fonte:
             self._google.calibrar(fonte, duracao=0.5)
             return self._google.ouvir_comando(fonte, timeout=timeout)
 
@@ -300,17 +468,29 @@ class OuvidosVosk:
         pass  # o modelo é liberado com o processo
 
 
-def criar_ouvidos() -> OuvidosPorcupine | OuvidosVosk | Ouvidos:
-    """Escolhe o melhor motor disponível: Porcupine → Vosk → Google."""
+def criar_ouvidos() -> OuvidosPorcupine | OuvidosOpenWakeWord | OuvidosVosk | Ouvidos:
+    """Escolhe o melhor motor disponível: Porcupine → OpenWakeWord → Vosk → Google.
+
+    Após escolher o motor, pré-carrega o Whisper em background para que o
+    modelo esteja pronto antes do primeiro comando do usuário.
+    """
+    motor: OuvidosPorcupine | OuvidosOpenWakeWord | OuvidosVosk | Ouvidos
+
     try:
-        return OuvidosPorcupine()
+        motor = OuvidosPorcupine()
     except Exception as e:
         print(f"[BMO] Porcupine indisponível: {e}")
+        try:
+            motor = OuvidosOpenWakeWord()
+        except Exception as e:
+            print(f"[BMO] OpenWakeWord indisponível: {e}")
+            try:
+                motor = OuvidosVosk()
+            except Exception as e:
+                print(f"[BMO] Vosk indisponível: {e}")
+                print("[BMO] Usando escuta passiva via Google (gasta requisições).")
+                motor = Ouvidos()
 
-    try:
-        return OuvidosVosk()
-    except Exception as e:
-        print(f"[BMO] Vosk indisponível: {e}")
-
-    print("[BMO] Usando escuta passiva via Google (gasta requisições).")
-    return Ouvidos()
+    # Pré-aquece o Whisper em background — elimina latência no 1º comando
+    TranscritorWhisper.precarregar()
+    return motor
